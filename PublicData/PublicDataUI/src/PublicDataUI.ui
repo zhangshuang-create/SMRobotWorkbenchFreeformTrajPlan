@@ -1,0 +1,271 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>PublicDataUI</class>
+ <widget class="QWidget" name="PublicDataUI">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>481</width>
+    <height>520</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>Data Management Panel</string>
+  </property>
+  <property name="styleSheet">
+   <string notr="true">
+QWidget {
+    background-color: #f5f5f5;
+}
+
+QPushButton {
+    background-color: #ffffff;
+    border: 2px solid #e0e0e0;
+    border-radius: 8px;
+    color: #333333;
+    font-size: 12pt;
+    font-weight: bold;
+    padding: 12px;
+    text-align: left;
+    padding-left: 20px;
+}
+
+QPushButton:hover {
+    background-color: #f0f7ff;
+    border-color: #2196F3;
+    color: #2196F3;
+}
+
+QPushButton:pressed {
+    background-color: #e3f2fd;
+    border-color: #1976D2;
+}
+
+QPushButton#btn_clearModel {
+    border-left: 4px solid #4CAF50;
+}
+
+QPushButton#btn_clearModel:hover {
+    border-left-color: #45a049;
+}
+
+QPushButton#btn_clearControlPoints {
+    border-left: 4px solid #2196F3;
+}
+
+QPushButton#btn_clearControlPoints:hover {
+    border-left-color: #0b7dda;
+}
+
+QPushButton#btn_clearTrajectory {
+    border-left: 4px solid #FF9800;
+}
+
+QPushButton#btn_clearTrajectory:hover {
+    border-left-color: #e68900;
+}
+
+QPushButton#btn_clearDeposit {
+    border-left: 4px solid #f44336;
+}
+
+QPushButton#btn_clearDeposit:hover {
+    border-left-color: #da190b;
+}
+
+QPushButton#btn_clearThickness {
+    border-left: 4px solid #9C27B0;
+}
+
+QPushButton#btn_clearThickness:hover {
+    border-left-color: #7B1FA2;
+}
+
+QLabel#titleLabel {
+    color: #333333;
+    font-size: 16pt;
+    font-weight: bold;
+    padding: 10px;
+}
+
+QLabel#subtitleLabel {
+    color: #666666;
+    font-size: 10pt;
+    padding-left: 10px;
+    padding-bottom: 10px;
+}
+   </string>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <property name="spacing">
+    <number>16</number>
+   </property>
+   <property name="leftMargin">
+    <number>24</number>
+   </property>
+   <property name="topMargin">
+    <number>24</number>
+   </property>
+   <property name="rightMargin">
+    <number>24</number>
+   </property>
+   <property name="bottomMargin">
+    <number>24</number>
+   </property>
+   <item>
+    <widget class="QLabel" name="titleLabel">
+     <property name="text">
+      <string>Data Management</string>
+     </property>
+     <property name="alignment">
+      <set>Qt::AlignLeading|Qt::AlignLeft|Qt::AlignVCenter</set>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QLabel" name="subtitleLabel">
+     <property name="text">
+      <string>Clear specific data categories from the system</string>
+     </property>
+     <property name="alignment">
+      <set>Qt::AlignLeading|Qt::AlignLeft|Qt::AlignVCenter</set>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <spacer name="verticalSpacer_top">
+     <property name="orientation">
+      <enum>Qt::Vertical</enum>
+     </property>
+     <property name="sizeType">
+      <enum>QSizePolicy::Fixed</enum>
+     </property>
+     <property name="sizeHint" stdset="0">
+      <size>
+       <width>20</width>
+       <height>10</height>
+      </size>
+     </property>
+    </spacer>
+   </item>
+   <item>
+    <widget class="QPushButton" name="btn_clearModel">
+     <property name="minimumSize">
+      <size>
+       <width>0</width>
+       <height>60</height>
+      </size>
+     </property>
+     <property name="cursor">
+      <cursorShape>PointingHandCursor</cursorShape>
+     </property>
+     <property name="toolTip">
+      <string>Remove all loaded 3D model data</string>
+     </property>
+     <property name="text">
+      <string>Clear Model Data</string>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QPushButton" name="btn_clearControlPoints">
+     <property name="minimumSize">
+      <size>
+       <width>0</width>
+       <height>60</height>
+      </size>
+     </property>
+     <property name="cursor">
+      <cursorShape>PointingHandCursor</cursorShape>
+     </property>
+     <property name="toolTip">
+      <string>Remove all control points and markers</string>
+     </property>
+     <property name="text">
+      <string>Clear Control Points</string>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QPushButton" name="btn_clearTrajectory">
+     <property name="minimumSize">
+      <size>
+       <width>0</width>
+       <height>60</height>
+      </size>
+     </property>
+     <property name="cursor">
+      <cursorShape>PointingHandCursor</cursorShape>
+     </property>
+     <property name="toolTip">
+      <string>Remove all trajectory path data</string>
+     </property>
+     <property name="text">
+      <string>Clear Trajectory Points</string>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QPushButton" name="btn_clearDeposit">
+     <property name="minimumSize">
+      <size>
+       <width>0</width>
+       <height>60</height>
+      </size>
+     </property>
+     <property name="cursor">
+      <cursorShape>PointingHandCursor</cursorShape>
+     </property>
+     <property name="toolTip">
+      <string>Remove all deposition simulation results</string>
+     </property>
+     <property name="text">
+      <string>Clear Deposition Data</string>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QPushButton" name="btn_clearThickness">
+     <property name="minimumSize">
+      <size>
+       <width>0</width>
+       <height>60</height>
+      </size>
+     </property>
+     <property name="cursor">
+      <cursorShape>PointingHandCursor</cursorShape>
+     </property>
+     <property name="toolTip">
+      <string>Remove all public thickness prediction results</string>
+     </property>
+     <property name="text">
+      <string>Clear Thickness Data</string>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <spacer name="verticalSpacer_bottom">
+     <property name="orientation">
+      <enum>Qt::Vertical</enum>
+     </property>
+     <property name="sizeHint" stdset="0">
+      <size>
+       <width>20</width>
+       <height>40</height>
+      </size>
+     </property>
+    </spacer>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+ <slots>
+  <slot>on_btn_clearModel_clicked()</slot>
+  <slot>on_btn_clearControlPoints_clicked()</slot>
+  <slot>on_btn_clearTrajectory_clicked()</slot>
+  <slot>on_btn_clearDeposit_clicked()</slot>
+  <slot>on_btn_clearThickness_clicked()</slot>
+ </slots>
+</ui>
