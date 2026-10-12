@@ -1,26 +1,17 @@
 #pragma once
-#include <BurTrajPlan/BurTrajPlan_global.h>
-#include <BurTrajPlan/IBurTrajPlan.h>
-#include <ModelTangQing/imodel.h>
-#include <ModelTangQing/MeshData.h>
-#include <ModelTangQing/iscene.h>
-#include <iostream>
+#include <SlicingTrajPlan/BurTrajPlan_global.h>
+#include <SlicingTrajPlan/IBurTrajPlan.h>
 #include <vector>
 #include <string>
 #include <memory>
 #include <mutex>
-#include <iostream>
-#include <STLProcessor/STLProcessor.h>
-#include <BoundaryDetector/BoundaryDetector.h>
-#include <UniformSlicer/UniformSlicer.h>
-#include <TrajectoryConnector/TrajectoryConnector.h>
-#include <TrajectoryFrame/TrajectoryFrame.h>
-#include "TrajectoryExporter.h"
-#include <TrajectoryGenerator/TrajectoryGenerator.h>
-// [Important] Use the unified Common data structures
-#include <GeneralData/GeneralData.h>
-#include <RenderData/RenderData.h>
-#include <TrajData/TrajData.h>
+#include <SlicingTrajPlan/STLProcessor.h>
+#include <SlicingTrajPlan/BoundaryDetector.h>
+#include <SlicingTrajPlan/UniformSlicer.h>
+#include <SlicingTrajPlan/TrajectoryConnector.h>
+#include <SlicingTrajPlan/TrajectoryExporter.h>
+#include <SlicingTrajPlan/TrajectoryGenerator.h>
+#include <SlicingTrajPlan/GeneralData.h>
 namespace ModelTrajPlan
 {
     // Forward declarations to avoid cyclic dependencies and type conflicts
@@ -29,7 +20,6 @@ namespace ModelTrajPlan
     class STLProcessor;
     class BoundaryDetector;
     class UniformSlicer;
-    class TrajectoryFrame;
 
     // BurTrajPlan - core container class for the trajectory planning system (internal implementation, not exported directly)
     class BurTrajPlan_SHAREDLIB BurTrajPlan : public IBurTrajPlan
@@ -44,9 +34,6 @@ namespace ModelTrajPlan
         void getFilePaths(const GeneralData& generalData, std::vector<std::string>& filePaths) const override;
         void clear(GeneralData& generalData) override;
 
-        // [Addition] Load data from PublicModel into GeneralData
-        bool loadModelFromPublicData(const PublicData::PublicModel& publicModel, GeneralData& generalData) override;
-
         // Data state
         void getCurrentState(const GeneralData& generalData, DataState& state) const override;
 
@@ -54,28 +41,8 @@ namespace ModelTrajPlan
 
         void getTrajectoryPoints(const GeneralData& generalData, std::vector<TrajectoryPoint>& points) const override;
 
-        bool generateCuttingPlanes(GeneralData& generalData, RenderData* renderData = nullptr) override;
+        bool generateCuttingPlanes(GeneralData& generalData) override;
         void getCuttingPlanes(const GeneralData& generalData, std::vector<CuttingPlane>& planes) const override;
-
-        // Rendering interfaces
-        bool initializeRenderer(RenderData& renderData) override;
-        bool draw(const GeneralData& generalData, RenderData& renderData) override;
-
-        // Visibility controls
-        void setOriginalDataVisibility(RenderData& renderData, bool visible) override;
-        void setTrajectoryVisibility(RenderData& renderData, bool visible) override;
-        void setCuttingPlanesVisibility(RenderData& renderData, bool visible) override;
-        void setBoundaryVisibility(RenderData& renderData, bool visible) override;
-        void setOffsetBoundaryVisibility(RenderData& renderData, bool visible);
-
-        // Addition: interface implementation
-        void setKeepOriginalVisibleAfterPreprocess(bool keep) override;
-
-        // Check state
-        bool needsRenderUpdate(const RenderData& renderData) const override;
-
-        // Check whether renderable data exists
-        bool hasRenderableData(const GeneralData& generalData, const RenderData& renderData) const override;
 
         // Statistics interfaces
         void getTotalPointCount(const GeneralData& generalData, size_t& count) const override;
@@ -113,8 +80,7 @@ namespace ModelTrajPlan
         // === Trajectory generation interfaces (matching MATLAB behavior) ===
         bool generateMATLABTrajectory(GeneralData& generalData, int size_n,
             double z1Offset, double z2Offset,
-            double offsetDistance,
-            PublicData::TrajData& publicTrajData) override;
+            double offsetDistance) override;
 
         // Export trajectory data
         bool exportTrajectoryToFile(const GeneralData& generalData, const std::string& filename) const override;
@@ -127,9 +93,6 @@ namespace ModelTrajPlan
 
         // Execute trajectory connection
         bool connectTrajectoryPoints(GeneralData& generalData, ConnectionStrategy strategy = ConnectionStrategy::BowPath) override;
-
-        // Set connection visibility
-        bool setConnectionVisibility(RenderData& renderData, bool visible) override;
 
         // === Custom Z-position management ===
         bool setCustomZPositions(GeneralData& generalData, const std::vector<double>& zPositions) override;
@@ -144,9 +107,8 @@ namespace ModelTrajPlan
         std::unique_ptr<STLProcessor> stlProcessor_;
         std::unique_ptr<BoundaryDetector> boundaryDetector_;
         std::unique_ptr<UniformSlicer> uniformSlicer_;
-        TrajectoryGenerator* trajectoryGenerator_;  // Handles trajectory generation and rendering
+        TrajectoryGenerator* trajectoryGenerator_;
         std::unique_ptr<TrajectoryConnector> trajectoryConnector_;
-        // TrajectoryFrame is now used as static methods, no instance needed
 
         // === Thread safety ===
         mutable std::mutex mutex_;
@@ -158,7 +120,7 @@ namespace ModelTrajPlan
         //        numTrajectories - number of trajectory lines to generate
         // Output: generalData.boundaryData_ - boundary data
         //         generalData.processingState_.isBoundaryDetected - state flag
-        bool runBoundaryDetection(GeneralData& generalData, RenderData* renderData = nullptr);
+        bool runBoundaryDetection(GeneralData& generalData);
 
         // [ALGORITHM] Clear cutting plane data
         // Input/Output: generalData - clears cutting planes and trajectory data
@@ -194,14 +156,5 @@ namespace ModelTrajPlan
         // Output: generalData.slicingData_.cuttingPlanes_ - cutting plane data
         void convertSliceDataToCuttingPlanes(GeneralData& generalData);
 
-        // === Rendering helper methods (data conversion only) ===
-        // [DEPRECATED] Trajectory rendering now handled by TrajectoryGenerator::draw
-        // void prepareTrajectoryRenderFromData(const GeneralData& generalData, RenderData& renderData);
-
-        // [RENDER] Prepare cutting planes rendering data
-        // Input: generalData.slicingData_.cuttingPlanes_ - cutting plane data
-        //        generalData.modelDataManager_ - STL model (optional, for bounds)
-        // Output: renderData.getSlicingRenderData() - rendering model
-        void prepareCuttingPlanesRenderFromData(const GeneralData& generalData, RenderData& renderData);
     };
 }

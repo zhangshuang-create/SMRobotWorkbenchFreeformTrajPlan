@@ -1,44 +1,47 @@
 #pragma once
 
-#define _USE_MATH_DEFINES  // ±ØĞëÔÚ <cmath> Ö®Ç°¶¨Òå
-#include <cmath>           // °üº¬ M_PI ¶¨Òå
+#define _USE_MATH_DEFINES  // å¿…é¡»åœ¨ <cmath> ä¹‹å‰å®šä¹‰
+#include <cmath>           // åŒ…å« M_PI å®šä¹‰
 
 #include <Eigen/Dense>
 #include <vector>
 #include <string>
-#include <GeneralData/GeneralData_global.h>
-#include "SlicingData.h"  // °üº¬SlicingParamsµÄÍêÕû¶¨Òå
+#include <SlicingTrajPlan/GeneralData_global.h>
+#include "SlicingData.h"  // åŒ…å«SlicingParamsçš„å®Œæ•´å®šä¹‰
 #include <map>
-#include <OptSafeTrajData/OptSafeTrajData.h>  // °üº¬ CoordinateFrame Ã¶¾Ù¶¨Òå
+namespace PublicData { enum class CoordinateFrame { World }; }  // åŒ…å« CoordinateFrame æšä¸¾å®šä¹‰
 
-// Èç¹û M_PI ÈÔÎ´¶¨Òå£¨Ä³Ğ©±àÒëÆ÷£©£¬ÊÖ¶¯¶¨Òå
+// å¦‚æœ M_PI ä»æœªå®šä¹‰ï¼ˆæŸäº›ç¼–è¯‘å™¨ï¼‰ï¼Œæ‰‹åŠ¨å®šä¹‰
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
 
 namespace ModelTrajPlan
 {
-    // ¡¾ĞÂÔö¡¿¹ì¼£·Ö×éĞÅÏ¢£¨ÓÃÓÚ·µ»Ø¹ì¼£Í³¼Æ£©- ´Ó TrajectoryGenerator.h Ç¨ÒÆ
+    // ã€æ–°å¢ã€‘è½¨è¿¹åˆ†ç»„ä¿¡æ¯ï¼ˆç”¨äºè¿”å›è½¨è¿¹ç»Ÿè®¡ï¼‰- ä» TrajectoryGenerator.h è¿ç§»
     struct TrajectoryGroupInfo {
-        int numTrajectories = 0;       // ¹ì¼£ÌõÊı
-        int pointsPerTrajectory = 0;   // Ã¿Ìõ¹ì¼£µÄµãÊı
-        bool isConsistent = true;      // ËùÓĞ¹ì¼£µãÊıÊÇ·ñÒ»ÖÂ
+        int numTrajectories = 0;       // è½¨è¿¹æ¡æ•°
+        int pointsPerTrajectory = 0;   // æ¯æ¡è½¨è¿¹çš„ç‚¹æ•°
+        bool isConsistent = true;      // æ‰€æœ‰è½¨è¿¹ç‚¹æ•°æ˜¯å¦ä¸€è‡´
         TrajectoryGroupInfo() = default;
     };
 
 
 
-    // ¡¾ÖØ¹¹ĞÂÔö¡¿¹ì¼£Éú³É²ÎÊı½á¹¹ - ´ÓSlicingParams·ÖÀë³öÀ´µÄÆ«ÒÆ²ÎÊı
+    // ã€é‡æ„æ–°å¢ã€‘è½¨è¿¹ç”Ÿæˆå‚æ•°ç»“æ„ - ä»SlicingParamsåˆ†ç¦»å‡ºæ¥çš„åç§»å‚æ•°
     struct TrajectoryGenerationParams {
-        // Æ«ÒÆ²ÎÊı
-        double z1Offset = 0.0;            // ÆğÊ¼ZÆ«ÒÆ£¨ÉÏ±ß½çÆ«ÒÆ£©
-        double z2Offset = 0.0;            // ½áÊøZÆ«ÒÆ£¨ÏÂ±ß½çÆ«ÒÆ£©
-        double offsetDistance = 1.0;      // ·¨ÏßÆ«ÒÆ¾àÀë
+        int normalAxis = 4;
+        int forwardAxis = 0;
+        bool previewFirstPoint = false;
+        // åç§»å‚æ•°
+        double z1Offset = 0.0;            // èµ·å§‹Zåç§»ï¼ˆä¸Šè¾¹ç•Œåç§»ï¼‰
+        double z2Offset = 0.0;            // ç»“æŸZåç§»ï¼ˆä¸‹è¾¹ç•Œåç§»ï¼‰
+        double offsetDistance = 1.0;      // æ³•çº¿åç§»è·ç¦»
 
-        // ËÙ¶È²ÎÊı
-        double normalVelocity = 50.0;     // Õı³£¹ì¼£ËÙ¶È (mm/s)
-        double transitionVelocity = 50.0; // ¹ı¶É¶ÎËÙ¶È (mm/s)
-        double acceleration = 0.0;        // ¼ÓËÙ¶È (mm/s)
+        // é€Ÿåº¦å‚æ•°
+        double normalVelocity = 50.0;     // æ­£å¸¸è½¨è¿¹é€Ÿåº¦ (mm/s)
+        double transitionVelocity = 50.0; // è¿‡æ¸¡æ®µé€Ÿåº¦ (mm/s)
+        double acceleration = 0.0;        // åŠ é€Ÿåº¦ (mm/s)
 
         TrajectoryGenerationParams() = default;
         TrajectoryGenerationParams(double z1, double z2, double offset,
@@ -50,51 +53,51 @@ namespace ModelTrajPlan
     };
 
 
-    // Á¬½Ó²ßÂÔÃ¶¾Ù
+    // è¿æ¥ç­–ç•¥æšä¸¾
     enum class ConnectionStrategy {
-        Sequential = 0,    // Ë³ĞòÁ¬½Ó
-        Optimized = 1,     // ÓÅ»¯Á¬½Ó
-        ZigZag = 2,        // Z×ÖĞÎÁ¬½Ó
-        LayerByLayer = 3,  // Öğ²ãÁ¬½Ó
-        BowPath = 4        // ¹­ĞÎÂ·¾¶Á¬½Ó
+        Sequential = 0,    // é¡ºåºè¿æ¥
+        Optimized = 1,     // ä¼˜åŒ–è¿æ¥
+        ZigZag = 2,        // Zå­—å½¢è¿æ¥
+        LayerByLayer = 3,  // é€å±‚è¿æ¥
+        BowPath = 4        // å¼“å½¢è·¯å¾„è¿æ¥
     };
 
-    // ¡¾ĞÂÔö¡¿¹ì¼£Á¬½Ó²ÎÊı½á¹¹ - ´Ó TrajectoryConnector.h Ç¨ÒÆ
+    // ã€æ–°å¢ã€‘è½¨è¿¹è¿æ¥å‚æ•°ç»“æ„ - ä» TrajectoryConnector.h è¿ç§»
     struct TrajectoryConnectionParams {
-        int numTrajectories = 0;      // ¹ì¼£ÊıÁ¿
-        int pointsPerTrajectory = 0;  // Ã¿Ìõ¹ì¼£µÄµãÊı
-        ConnectionStrategy strategy = ConnectionStrategy::Sequential; // Á¬½Ó²ßÂÔ
+        int numTrajectories = 0;      // è½¨è¿¹æ•°é‡
+        int pointsPerTrajectory = 0;  // æ¯æ¡è½¨è¿¹çš„ç‚¹æ•°
+        ConnectionStrategy strategy = ConnectionStrategy::Sequential; // è¿æ¥ç­–ç•¥
 
         TrajectoryConnectionParams() = default;
     };
 
-    // ¹ì¼£½á¹¹ - °üº¬Î»×ËºÍÊ±¼ä´Á
+    // è½¨è¿¹ç»“æ„ - åŒ…å«ä½å§¿å’Œæ—¶é—´æˆ³
     struct TrajectoryPoint {
-        Eigen::Matrix4d pose = Eigen::Matrix4d::Identity();  // Æë´Î¾ØÕó×ËÌ¬Î»ÖÃ£©
-        double spray_distance = 0.0;                         // ÅçÍ¿¾àÀë£¨mm£©£¬¹¤¾ßµ½¹¤¼ş±íÃæµÄ¾àÀë
+        Eigen::Matrix4d pose = Eigen::Matrix4d::Identity();  // é½æ¬¡çŸ©é˜µå§¿æ€ä½ç½®ï¼‰
+        double spray_distance = 0.0;                         // å–·æ¶‚è·ç¦»ï¼ˆmmï¼‰ï¼Œå·¥å…·åˆ°å·¥ä»¶è¡¨é¢çš„è·ç¦»
         // ====== Debug / indexing metadata (non-functional) ======
-        // ÓÃÓÚ±êÊ¶¡°µÚ¼¸Ìõ¹ì¼£-µÚ¼¸²ã¡±£¬ÀıÈç£ºtrajectory_index=0, layer_index=1 ±íÊ¾ "01"
-        int trajectory_index = -1;                           // ¹ì¼£Ë÷Òı£¨trajectoryIndex£©
-        int layer_index = -1;                                // ²ãË÷Òı£¨layerIndex£©
+        // ç”¨äºæ ‡è¯†â€œç¬¬å‡ æ¡è½¨è¿¹-ç¬¬å‡ å±‚â€ï¼Œä¾‹å¦‚ï¼štrajectory_index=0, layer_index=1 è¡¨ç¤º "01"
+        int trajectory_index = -1;                           // è½¨è¿¹ç´¢å¼•ï¼ˆtrajectoryIndexï¼‰
+        int layer_index = -1;                                // å±‚ç´¢å¼•ï¼ˆlayerIndexï¼‰
 
-        double timestamp = 0.0;                              // Ê±¼ä´Á
-        double velocity = 0.0;                               // ËÙ¶È
-        double acceleration = 0.0;                           // ¼ÓËÙ¶È
-        int point_type = 0;                                  // µãÀàĞÍ£¨0=ÆÕÍ¨µã£¬1=¹Ø¼üµã£¬2=Í£Ö¹µã£©
+        double timestamp = 0.0;                              // æ—¶é—´æˆ³
+        double velocity = 0.0;                               // é€Ÿåº¦
+        double acceleration = 0.0;                           // åŠ é€Ÿåº¦
+        int point_type = 0;                                  // ç‚¹ç±»å‹ï¼ˆ0=æ™®é€šç‚¹ï¼Œ1=å…³é”®ç‚¹ï¼Œ2=åœæ­¢ç‚¹ï¼‰
     };
 
-    // CoordinateFrame Ã¶¾Ù¶¨ÒåÔÚ PublicData/TrajData/TrajData.h ÖĞ
+    // CoordinateFrame æšä¸¾å®šä¹‰åœ¨ PublicData/TrajData/TrajData.h ä¸­
 
     struct TolerancedTrajectoryPoint {
         Eigen::Matrix4d pose = Eigen::Matrix4d::Identity();
 
         Eigen::Matrix<double, 3, 2> pos_tolerance;
         Eigen::Matrix<double, 3, 2> orient_tolerance;
-        Eigen::Vector2d vel_range;//ËÙÂÊ·¶Î§
+        Eigen::Vector2d vel_range;//é€Ÿç‡èŒƒå›´
 
         bool is_adjustable;
         PublicData::CoordinateFrame tolerance_frame;
-        double spray_distance = 0.0;  // ÅçÍ¿¾àÀë£¨mm£©£¬¹¤¾ßµ½¹¤¼ş±íÃæµÄ¾àÀë
+        double spray_distance = 0.0;  // å–·æ¶‚è·ç¦»ï¼ˆmmï¼‰ï¼Œå·¥å…·åˆ°å·¥ä»¶è¡¨é¢çš„è·ç¦»
 
         TolerancedTrajectoryPoint()
             : pos_tolerance(Eigen::Matrix<double, 3, 2>::Zero()),
@@ -108,48 +111,48 @@ namespace ModelTrajPlan
         }
     };
 
-    // Èİ²îËÑË÷ÅäÖÃ½á¹¹Ìå
+    // å®¹å·®æœç´¢é…ç½®ç»“æ„ä½“
     struct ToleranceLimitConfig {
-        // ========== ËÑË÷·¶Î§ ==========
-        Eigen::Vector3d max_translation;  // mm, Ã¿¸öÖáµÄ×î´óÆ½ÒÆËÑË÷·¶Î§, e.g. [50, 30, 10]
-        Eigen::Vector3d max_rotation;     // rad, Ã¿¸öÖáµÄ×î´óĞı×ªËÑË÷·¶Î§, e.g. [M_PI, M_PI/4, M_PI/3]
+        // ========== æœç´¢èŒƒå›´ ==========
+        Eigen::Vector3d max_translation;  // mm, æ¯ä¸ªè½´çš„æœ€å¤§å¹³ç§»æœç´¢èŒƒå›´, e.g. [50, 30, 10]
+        Eigen::Vector3d max_rotation;     // rad, æ¯ä¸ªè½´çš„æœ€å¤§æ—‹è½¬æœç´¢èŒƒå›´, e.g. [M_PI, M_PI/4, M_PI/3]
 
-        // ========== ¶ş·ÖËÑË÷Í£Ö¹Ìõ¼ş ==========
-        double position_tolerance;        // mm, Î»ÖÃËÑË÷¾«¶È£¨Í£Ö¹Ìõ¼ş£©£¬Ä¬ÈÏ 0.1mm
-        double rotation_tolerance;        // rad, Ğı×ªËÑË÷¾«¶È£¨Í£Ö¹Ìõ¼ş£©£¬Ä¬ÈÏ 0.5¡ã = 0.00873 rad
+        // ========== äºŒåˆ†æœç´¢åœæ­¢æ¡ä»¶ ==========
+        double position_tolerance;        // mm, ä½ç½®æœç´¢ç²¾åº¦ï¼ˆåœæ­¢æ¡ä»¶ï¼‰ï¼Œé»˜è®¤ 0.1mm
+        double rotation_tolerance;        // rad, æ—‹è½¬æœç´¢ç²¾åº¦ï¼ˆåœæ­¢æ¡ä»¶ï¼‰ï¼Œé»˜è®¤ 0.5Â° = 0.00873 rad
 
-        // ========== ¹¹Ôìº¯Êı£¨ÉèÖÃÄ¬ÈÏÖµ£© ==========
+        // ========== æ„é€ å‡½æ•°ï¼ˆè®¾ç½®é»˜è®¤å€¼ï¼‰ ==========
         ToleranceLimitConfig()
             : max_translation(50.0, 30.0, 10.0),
             max_rotation(M_PI, M_PI / 4.0, M_PI / 3.0),
             position_tolerance(0.1),           // 0.1mm
-            rotation_tolerance(0.00873)        // 0.5¡ã in radians
+            rotation_tolerance(0.00873)        // 0.5Â° in radians
         {}
     };
 
-    // Á¬½ÓÏß¶ÎĞÅÏ¢½á¹¹ - ´Ó TrajectoryConnector.h ÒÆ¶¯
+    // è¿æ¥çº¿æ®µä¿¡æ¯ç»“æ„ - ä» TrajectoryConnector.h ç§»åŠ¨
     struct ConnectionSegment {
-        Eigen::Vector3d startPoint = Eigen::Vector3d::Zero();        // ÆğÊ¼µã
-        Eigen::Vector3d endPoint = Eigen::Vector3d::Zero();          // ½áÊøµã
-        Eigen::Vector3f color = Eigen::Vector3f(1.0f, 1.0f, 1.0f);  // Ïß¶ÎÑÕÉ«
-        float lineWidth = 2.0f;                                      // Ïß¿í
-        int segmentType = 0;                                         // Ïß¶ÎÀàĞÍ£º0=¹ì¼£ÄÚÁ¬½Ó£¬1=¹ì¼£¼äÁ¬½Ó£¬2=¹ı¶ÉÁ¬½Ó
+        Eigen::Vector3d startPoint = Eigen::Vector3d::Zero();        // èµ·å§‹ç‚¹
+        Eigen::Vector3d endPoint = Eigen::Vector3d::Zero();          // ç»“æŸç‚¹
+        Eigen::Vector3f color = Eigen::Vector3f(1.0f, 1.0f, 1.0f);  // çº¿æ®µé¢œè‰²
+        float lineWidth = 2.0f;                                      // çº¿å®½
+        int segmentType = 0;                                         // çº¿æ®µç±»å‹ï¼š0=è½¨è¿¹å†…è¿æ¥ï¼Œ1=è½¨è¿¹é—´è¿æ¥ï¼Œ2=è¿‡æ¸¡è¿æ¥
     };
 
-    // Á¬½ÓÊı¾İ½á¹¹ - ´æ´¢¹ì¼£Á¬½ÓµÄÍêÕû½á¹û
+    // è¿æ¥æ•°æ®ç»“æ„ - å­˜å‚¨è½¨è¿¹è¿æ¥çš„å®Œæ•´ç»“æœ
     struct ConnectionData {
-        std::vector<TrajectoryPoint> connectedTrajectory_;           // Á¬½ÓºóµÄÍêÕû¹ì¼£
-        std::vector<ConnectionSegment> connectionSegments_;          // Á¬½ÓÏß¶Î
-        ConnectionStrategy strategy_ = ConnectionStrategy::Sequential; // Ê¹ÓÃµÄÁ¬½Ó²ßÂÔ
-        bool isConnected_ = false;                                   // ÊÇ·ñÒÑÁ¬½Ó
+        std::vector<TrajectoryPoint> connectedTrajectory_;           // è¿æ¥åçš„å®Œæ•´è½¨è¿¹
+        std::vector<ConnectionSegment> connectionSegments_;          // è¿æ¥çº¿æ®µ
+        ConnectionStrategy strategy_ = ConnectionStrategy::Sequential; // ä½¿ç”¨çš„è¿æ¥ç­–ç•¥
+        bool isConnected_ = false;                                   // æ˜¯å¦å·²è¿æ¥
 
-        // Á¬½Ó²ÎÊı
+        // è¿æ¥å‚æ•°
         double transitionSpeed_ = 30.0;
         double normalSpeed_ = 50.0;
         double connectionDistance_ = 5.0;
     };
 
-    // ¼ò»¯µÄÊı¾İ½á¹¹¶¨Òå£¬À´×Ô TrajectoryGenerator.h - ÖØÃüÃû±ÜÃâÓëThicknessCalculator³åÍ»
+    // ç®€åŒ–çš„æ•°æ®ç»“æ„å®šä¹‰ï¼Œæ¥è‡ª TrajectoryGenerator.h - é‡å‘½åé¿å…ä¸ThicknessCalculatorå†²çª
     struct TrajVector3D {
         double x = 0.0, y = 0.0, z = 0.0;
         TrajVector3D() = default;
@@ -169,21 +172,21 @@ namespace ModelTrajPlan
         TrajData();
         ~TrajData();
 
-        // Êı¾İ³ÉÔ± - ¹«¿ª·ÃÎÊ£¬½öÊı¾İÈİÆ÷
-        std::vector<TrajectoryPoint> trajectoryPoints_;        // Ö÷¹ì¼£µã¼¯ºÏ
+        // æ•°æ®æˆå‘˜ - å…¬å¼€è®¿é—®ï¼Œä»…æ•°æ®å®¹å™¨
+        std::vector<TrajectoryPoint> trajectoryPoints_;        // ä¸»è½¨è¿¹ç‚¹é›†åˆ
         std::map<double, TolerancedTrajectoryPoint> trajectoryPointsbf_;
         std::map<double, TolerancedTrajectoryPoint> trajectoryPointsaf_;
 
-        ConnectionData connectionData_;                        // Á¬½ÓÊı¾İ£¨ÍêÕûµÄÁ¬½Ó½á¹û£©
-        ToleranceLimitConfig tol_limit;   //Èİ²î·¶Î§
+        ConnectionData connectionData_;                        // è¿æ¥æ•°æ®ï¼ˆå®Œæ•´çš„è¿æ¥ç»“æœï¼‰
+        ToleranceLimitConfig tol_limit;   //å®¹å·®èŒƒå›´
 
-        // ¡¾ĞÂÔö¡¿²ÉÑùµãÊı¾İ - ´Ó±ß½çÏß¾ùÔÈ²ÉÑùµÃµ½µÄµã [trajectoryIndex][layerIndex]
+        // ã€æ–°å¢ã€‘é‡‡æ ·ç‚¹æ•°æ® - ä»è¾¹ç•Œçº¿å‡åŒ€é‡‡æ ·å¾—åˆ°çš„ç‚¹ [trajectoryIndex][layerIndex]
         std::vector<std::vector<Eigen::Vector3d>> sampledBoundaryPoints_;
 
-        // ¡¾ÖØ¹¹¡¿¹ì¼£²ÎÊı¹ÜÀí - ´Ó¸÷¸öËã·¨Ä£¿éÇ¨ÒÆ¹ıÀ´
-        TrajectoryGenerationParams generationParams_;         // ¹ì¼£Éú³É²ÎÊı£¨Æ«ÒÆ²ÎÊı£©
-        TrajectoryConnectionParams connectionParams_;          // ¹ì¼£Á¬½Ó²ÎÊı
-        TrajectoryGroupInfo groupInfo_;                       // ¹ì¼£·Ö×éĞÅÏ¢
+        // ã€é‡æ„ã€‘è½¨è¿¹å‚æ•°ç®¡ç† - ä»å„ä¸ªç®—æ³•æ¨¡å—è¿ç§»è¿‡æ¥
+        TrajectoryGenerationParams generationParams_;         // è½¨è¿¹ç”Ÿæˆå‚æ•°ï¼ˆåç§»å‚æ•°ï¼‰
+        TrajectoryConnectionParams connectionParams_;          // è½¨è¿¹è¿æ¥å‚æ•°
+        TrajectoryGroupInfo groupInfo_;                       // è½¨è¿¹åˆ†ç»„ä¿¡æ¯
 
     private:
 

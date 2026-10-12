@@ -154,11 +154,6 @@ namespace SprayTrajPlan
         return true;
     }
 
-    void TrajPlanPipeline::setOptCutsExecutable(const std::string& exe_path)
-    {
-        optcuts_runner_->setOptCutsExecutable(exe_path);
-    }
-
     void TrajPlanPipeline::setOptCutsRoot(const std::string& root_path)
     {
         optcuts_runner_->setOptCutsRoot(root_path);

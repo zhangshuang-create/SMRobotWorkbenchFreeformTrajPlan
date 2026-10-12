@@ -1,10 +1,10 @@
 #pragma once
 // ���� BoundaryLine ����������
-#include "BoundaryData.h"
+#include <SlicingTrajPlan/BoundaryData.h>
 #include <Eigen/Dense>
 #include <vector>
 #include <string>
-#include <GeneralData/GeneralData_global.h>
+#include <SlicingTrajPlan/GeneralData_global.h>
 namespace ModelTrajPlan
 {
     enum class SlicingMode : int {
@@ -43,9 +43,10 @@ namespace ModelTrajPlan
     using SlicingLocation = std::vector<SlicePlane>;
     // [Refactor] Slicing parameter structure - contains slicing-related parameters only, no offset parameters
     struct SlicingParams {
-        int numTrajectories = 30;      // Derived point count per contour
+        int numTrajectories = 0;       // 0 derives the count from spacing; positive values override it
         double trajectorySpacing = 1.0; // Requested contour spacing d (mm)
         double minStep = 50.0;         // Minimum Z step used by parallel slicing (mm)
+        int maxSliceCount = 0;         // Final slice-layer limit; 0 means unlimited
         SlicingMode mode = SlicingMode::AA;
         std::vector<double> customZPositions;  // Custom Z slicing positions
 
@@ -59,7 +60,7 @@ namespace ModelTrajPlan
         }
 
         void applyDefault() {
-            numTrajectories = 50;
+            numTrajectories = 0;
             customZPositions.clear();
         }
     };
@@ -69,6 +70,9 @@ namespace ModelTrajPlan
     struct SliceResult {
         std::vector<BoundaryLine> internalBoundaries;              // Internal boundaries (position data only)
         SlicingParams usedParams;                                  // Actually used slicing parameters
+        // True when planes are derived from the STL Z range because the two
+        // open boundaries and their skeleton are unavailable.
+        bool isBoundarylessFallback = false;
     };
 
     class GeneralData_SHAREDLIB SlicingData

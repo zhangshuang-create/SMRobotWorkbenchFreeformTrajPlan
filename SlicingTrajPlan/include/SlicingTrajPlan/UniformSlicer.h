@@ -1,14 +1,10 @@
 #pragma once
 #include "UniformSlicer_global.h"
-#include <GeneralData/GeneralData.h>  // Use unified type definitions from GeneralData
-#include <RenderData/SlicingRenderData.h>
-#include <STLProcessor/STLProcessor.h>
-#include <BoundaryDetector/BoundaryDetector.h>
+#include <SlicingTrajPlan/GeneralData.h>
+#include <SlicingTrajPlan/STLProcessor.h>
+#include <SlicingTrajPlan/BoundaryDetector.h>
 #include <vector>
 #include <Eigen/Dense>
-#include <ModelTangQing/imodel.h>
-#include <ModelTangQing/MeshData.h>
-#include <ModelTangQing/iscene.h>
 namespace ModelTrajPlan
 {
     class UniformSlicer_SHAREDLIB UniformSlicer
@@ -35,20 +31,10 @@ namespace ModelTrajPlan
             std::vector<CuttingPlane>* cuttingPlanes = nullptr,
             const std::vector<CuttingPlane>* oldCuttingPlanes = nullptr);
 
-        // === Rendering Interface (receives data as parameters) ===
-        bool initializeRenderer(SlicingRenderData& renderData);
         static bool convertToCuttingPlanes(
             SliceResult& sliceResult,
             const std::vector<CuttingPlane>* oldCuttingPlanes,
             const ModelData* modelData);
-
-        // [RENDER] Create cutting planes rendering model
-        // Input: cuttingPlanes - cutting plane data
-        //        modelData - STL model (optional, for bounds)
-        // Output: renderData - updated with rendering model
-        static imodel_spointer createCuttingPlanesModel(SlicingRenderData& renderData,
-            const std::vector<CuttingPlane>& cuttingPlanes,
-            const SliceResult& sliceResult);
         // Update single cutting plane size (calculate bounding box * 1.2 from transformed intersection points)
         // Input: plane - cutting plane data (contains transformation parameters)
         //        modelData - STL model
@@ -58,8 +44,6 @@ namespace ModelTrajPlan
             const ModelData& modelData,
             const Eigen::Vector3d& originalCenter,
             bool& updata);
-        bool draw(SlicingRenderData& renderData,
-            const SlicingData& slicing) const;
 
         bool buildSlicePlanes(
             const Epiphyseal& slicingnode,
@@ -89,9 +73,6 @@ namespace ModelTrajPlan
         // [REMOVED] generateReferenceLines and calculateQuaternions functions
         // Responsibility transferred: TrajectoryGenerator is responsible for calculating reference lines and poses
 
-        // Color conversion helper
-        static Eigen::Vector3f hue2rgb(float h);
-
         static std::vector<Eigen::Vector3d> calculateSTLIntersectionWithPlane(
             const ModelData& modelData,
             const Eigen::Vector3d& planeCenter,
@@ -104,7 +85,7 @@ namespace ModelTrajPlan
         //        planeNormal - plane normal vector
         //        z - Z height
         // Output: vector<BoundaryLine> - traced contour lines
-        static std::vector<BoundaryLine> UniformSlicer::traceContoursFromIntersections(
+        static std::vector<BoundaryLine> traceContoursFromIntersections(
             const ModelData& modelData,
             const SlicePlane& plane);
     };

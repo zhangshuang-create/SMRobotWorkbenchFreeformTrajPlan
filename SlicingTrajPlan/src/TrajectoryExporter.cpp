@@ -1,8 +1,37 @@
-#include "TrajectoryExporter.h"
+#include <SlicingTrajPlan/TrajectoryExporter.h>
 #include <fstream>
+#include <algorithm>
 #include <iomanip>
 #include <sstream>
 #include <cmath>
+#include <cctype>
+#include <filesystem>
+
+namespace
+{
+    std::string fanucProgramName(const std::string& filename)
+    {
+        std::string name = std::filesystem::path(filename).stem().string();
+        std::string sanitized;
+        sanitized.reserve(name.size());
+        for(const unsigned char character : name) {
+            if(std::isalnum(character)) {
+                sanitized.push_back(static_cast<char>(std::toupper(character)));
+            } else {
+                sanitized.push_back('_');
+            }
+        }
+        if(sanitized.empty()) {
+            sanitized = "TRAJECT";
+        }
+        if(!std::isalpha(static_cast<unsigned char>(sanitized.front()))) {
+            sanitized.insert(sanitized.begin(), 'P');
+        }
+        sanitized.resize(std::min<std::size_t>(sanitized.size(), 8));
+        return sanitized;
+    }
+}
+
 namespace ModelTrajPlan
 {
     TrajectoryExporter::TrajectoryExporter()
@@ -17,7 +46,7 @@ namespace ModelTrajPlan
 
 
     // =============================================================================
-// 1. µ¼³ö¹ì¼£ÎÄ¼þ£¨²¹³äÊ±¼ä´Á£©
+// 1. ï¿½ï¿½ï¿½ï¿½ï¿½ì¼£ï¿½Ä¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê±ï¿½ï¿½ï¿½ï¿½ï¿½
 // =============================================================================
     bool TrajectoryExporter::exportTrajectoryToFile(const std::vector<TrajectoryPoint>& trajectoryPoints,
         const std::string& filename)
@@ -28,7 +57,7 @@ namespace ModelTrajPlan
                 return false;
             }
 
-            // Ô¤ÏÈ¼ÆËãÊ±¼ä´Á£¨ºÍÄãÌá¹©µÄÂß¼­ÍêÈ«Ò»ÖÂ£©
+            // Ô¤ï¿½È¼ï¿½ï¿½ï¿½Ê±ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½á¹©ï¿½ï¿½ï¿½ß¼ï¿½ï¿½ï¿½È«Ò»ï¿½Â£ï¿½
             std::vector<double> timestamps;
             double current_time = 0.0;
             timestamps.push_back(current_time);
@@ -55,7 +84,7 @@ namespace ModelTrajPlan
                 timestamps.push_back(current_time);
             }
 
-            // µ¼³öËùÓÐÊý¾Ý£¬Ê¹ÓÃ¼ÆËãºóµÄÊ±¼ä´Á
+            // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ý£ï¿½Ê¹ï¿½Ã¼ï¿½ï¿½ï¿½ï¿½ï¿½Ê±ï¿½ï¿½ï¿½
             for (size_t i = 0; i < trajectoryPoints.size(); ++i) {
                 const auto& point = trajectoryPoints[i];
                 Eigen::Vector3d position = extractPosition(point.pose);
@@ -84,7 +113,7 @@ namespace ModelTrajPlan
     }
 
     // =============================================================================
-    // 2. µ¼³öExcel£¨¼òµ¥°æ£ºÐÂÔö Timestamp ÁÐ£©
+    // 2. ï¿½ï¿½ï¿½ï¿½Excelï¿½ï¿½ï¿½òµ¥°æ£ºï¿½ï¿½ï¿½ï¿½ Timestamp ï¿½Ð£ï¿½
     // =============================================================================
     bool TrajectoryExporter::exportToExcel(const std::vector<TrajectoryPoint>& trajectoryPoints,
         const std::string& filename)
@@ -95,7 +124,7 @@ namespace ModelTrajPlan
                 return false;
             }
 
-            // Ô¤ÏÈ¼ÆËãÊ±¼ä´Á
+            // Ô¤ï¿½È¼ï¿½ï¿½ï¿½Ê±ï¿½ï¿½ï¿½
             std::vector<double> timestamps;
             double current_time = 0.0;
             timestamps.push_back(current_time);
@@ -121,7 +150,7 @@ namespace ModelTrajPlan
                 timestamps.push_back(current_time);
             }
 
-            // CSV header£ºÔö¼Ó Timestamp
+            // CSV headerï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ Timestamp
             file << "X,Y,Z,Roll,Pitch,Yaw,SprayDistance,Timestamp\n";
 
             for (size_t i = 0; i < trajectoryPoints.size(); ++i) {
@@ -148,7 +177,7 @@ namespace ModelTrajPlan
     }
 
     // =============================================================================
-    // 3. µ¼³öExcelÍêÕû°æ£ºÌæ»»Ô­ÓÐÊ±¼ä´ÁÎª¼ÆËãÖµ
+    // 3. ï¿½ï¿½ï¿½ï¿½Excelï¿½ï¿½ï¿½ï¿½ï¿½æ£ºï¿½æ»»Ô­ï¿½ï¿½Ê±ï¿½ï¿½ï¿½Îªï¿½ï¿½ï¿½ï¿½Öµ
     // =============================================================================
     bool TrajectoryExporter::exportToExcelWithVelocity(const std::vector<TrajectoryPoint>& trajectoryPoints,
         const std::string& filename)
@@ -159,7 +188,7 @@ namespace ModelTrajPlan
                 return false;
             }
 
-            // Ô¤ÏÈ¼ÆËãÊ±¼ä´Á
+            // Ô¤ï¿½È¼ï¿½ï¿½ï¿½Ê±ï¿½ï¿½ï¿½
             std::vector<double> timestamps;
             double current_time = 0.0;
             timestamps.push_back(current_time);
@@ -206,7 +235,7 @@ namespace ModelTrajPlan
                     << formatNumber(quaternion.z()) << ","
                     << formatNumber(point.velocity) << ","
                     << formatNumber(point.acceleration) << ","
-                    << formatNumber(timestamps[i], 6) << ","  // Ê¹ÓÃ¼ÆËãÊ±¼ä´Á
+                    << formatNumber(timestamps[i], 6) << ","  // Ê¹ï¿½Ã¼ï¿½ï¿½ï¿½Ê±ï¿½ï¿½ï¿½
                     << point.point_type << ","
                     << formatNumber(point.spray_distance) << "\n";
             }
@@ -220,7 +249,7 @@ namespace ModelTrajPlan
     }
 
     bool TrajectoryExporter::exportFANUCProgram(const std::vector<TrajectoryPoint>& trajectoryPoints,
-        const std::string& filename)
+        const std::string& filename, const FanucTcpDefinition& tcp)
     {
         try {
             std::ofstream file(filename);
@@ -228,46 +257,57 @@ namespace ModelTrajPlan
                 return false;
             }
 
-            // FANUC program header
-            file << "/PROG  GJ2\n";
-            file << "/ATTR\n";
-            file << "OWNER    = MNEDITOR;\n";
-            file << "COMMENT  = \"Spray Trajectory\";\n";
-            file << "PROG_SIZE  = 0;\n";
-            file << "VERSION  = 0;\n";
-            file << "/MN\n";
-            file << "   1:  UFRAME_NUM=2 ;\n";
-            file << "   2:  UTOOL_NUM=1 ;\n";
+            const std::string programName = fanucProgramName(filename);
+            file << "/PROG  " << programName << "\n"
+                 << "/ATTR\n"
+                 << "OWNER\t\t= MNEDITOR;\n"
+                 << "COMMENT\t\t= \"Spray Trajectory\";\n"
+                 << "PROG_SIZE\t= 0;\n"
+                 << "VERSION\t\t= 0;\n"
+                 << "LINE_COUNT\t= " << trajectoryPoints.size() + (tcp.enabled ? 10 : 2) << ";\n"
+                 << "MEMORY_SIZE\t= 0;\n"
+                 << "PROTECT\t\t= READ_WRITE;\n"
+                 << "DEFAULT_GROUP\t= 1,*,*,*,*;\n"
+                 << "/MN\n"
+                 << "   1:  UFRAME_NUM=2 ;\n"
+                 << "   2:  UTOOL_NUM=1 ;\n";
 
-            // Export trajectory points - includes position, orientation, and velocity
+            std::size_t firstMotionLine = 3;
+            if(tcp.enabled) {
+                file << "   3:  PR[99]=LPOS ;\n"
+                     << "   4:  PR[99,1]=(" << formatNumber(tcp.x) << ") ;\n"
+                     << "   5:  PR[99,2]=(" << formatNumber(tcp.y) << ") ;\n"
+                     << "   6:  PR[99,3]=(" << formatNumber(tcp.z) << ") ;\n"
+                     << "   7:  PR[99,4]=(" << formatNumber(tcp.w) << ") ;\n"
+                     << "   8:  PR[99,5]=(" << formatNumber(tcp.p) << ") ;\n"
+                     << "   9:  PR[99,6]=(" << formatNumber(tcp.r) << ") ;\n"
+                     << "  10:  UTOOL[1]=PR[99] ;\n";
+                firstMotionLine = 11;
+            }
+
             for (size_t i = 0; i < trajectoryPoints.size(); ++i) {
                 const auto& point = trajectoryPoints[i];
-                // Extract position from homogeneous transform matrix
-                Eigen::Vector3d position = extractPosition(point.pose);
-                // Extract Euler angles (FANUC uses Euler angles for orientation)
-                Eigen::Vector3d eulerAngles = extractEulerAngles(point.pose);
-
-                // FANUC format: position (mm) + orientation (deg) + velocity (mm/s)
-                file << "   " << (i + 3) << ":  L P[" << (i + 1) << "] "
-                    << formatNumber(position.x()) << "mm "
-                    << formatNumber(position.y()) << "mm "
-                    << formatNumber(position.z()) << "mm "
-                    << formatNumber(eulerAngles.x()) << "deg "
-                    << formatNumber(eulerAngles.y()) << "deg "
-                    << formatNumber(eulerAngles.z()) << "deg"
-                    << " " << formatNumber(point.velocity) << "mm/sec";
-
-                // Add point-type annotation
-                if (point.point_type == 1) {
-                    file << " ; Key point";
-                }
-                else if (point.point_type == 2) {
-                    file << " ; Stop point";
-                }
-                file << "\n";
+                const int speed = std::max(1, static_cast<int>(std::lround(
+                    point.velocity > 0.0 ? point.velocity : 50.0)));
+                file << "   " << (i + firstMotionLine) << ":  L P[" << (i + 1) << "] "
+                    << speed << "mm/sec CNT100    ;\n";
             }
 
             file << "/POS\n";
+            for (size_t i = 0; i < trajectoryPoints.size(); ++i) {
+                const auto& point = trajectoryPoints[i];
+                const Eigen::Vector3d position = extractPosition(point.pose);
+                const Eigen::Vector3d eulerAngles = extractEulerAngles(point.pose);
+                file << "P[" << (i + 1) << "]{\n"
+                     << "   GP1:\n"
+                     << "\tUF : 2, UT : 1,\t\tCONFIG : 'N U T, 0, 0, 0',\n"
+                     << "\tX = " << formatNumber(position.x()) << "  mm,\tY = "
+                     << formatNumber(position.y()) << "  mm,\tZ = "
+                     << formatNumber(position.z()) << "  mm,\n"
+                     << "\tW = " << formatNumber(eulerAngles.x()) << " deg,\tP = "
+                     << formatNumber(eulerAngles.y()) << " deg,\tR = "
+                     << formatNumber(eulerAngles.z()) << " deg\n};\n";
+            }
             file << "/END\n";
 
             file.close();
@@ -281,7 +321,7 @@ namespace ModelTrajPlan
 
     bool TrajectoryExporter::exportABBProgram(const std::vector<TrajectoryPoint>& trajectoryPoints,
         const std::string& txtFilename,
-        const std::string& modFilename)
+        const std::string& modFilename, const AbbTcpDefinition& tcp)
     {
         try {
             std::ofstream file(modFilename);
@@ -293,6 +333,13 @@ namespace ModelTrajPlan
             file << "MODULE MainModule\n";
             file << "  ! Auto-generated spray trajectory program\n";
             file << "  ! Generated points: " << trajectoryPoints.size() << "\n\n";
+            if(tcp.enabled) {
+                file << "  PERS tooldata toolTCP := [TRUE,[["
+                     << formatNumber(tcp.x) << "," << formatNumber(tcp.y) << "," << formatNumber(tcp.z)
+                     << "],[" << formatNumber(tcp.q1) << "," << formatNumber(tcp.q2) << ","
+                     << formatNumber(tcp.q3) << "," << formatNumber(tcp.q4)
+                     << "]],[0,[0,0,0],[1,0,0,0],0,0,0]];\n\n";
+            }
 
             // Step 1: define all robtargets (must be defined outside PROC)
             for (size_t i = 0; i < trajectoryPoints.size(); ++i) {
@@ -338,7 +385,7 @@ namespace ModelTrajPlan
                 std::string zoneType = mustStop ? "fine" : "z10";
 
                 file << "    " << moveType << " p" << (i + 1) << ", v" << speedValue << ", "
-                    << zoneType << ", tool0;\n";
+                    << zoneType << ", " << (tcp.enabled ? "toolTCP" : "tool0") << ";\n";
             }
 
             file << "  ENDPROC\n";

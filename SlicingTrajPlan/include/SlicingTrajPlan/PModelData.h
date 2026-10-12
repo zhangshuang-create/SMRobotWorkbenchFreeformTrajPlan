@@ -2,7 +2,7 @@
 
 #include <vector>
 #include <string>
-#include <GeneralData/GeneralData_global.h>
+#include <SlicingTrajPlan/GeneralData_global.h>
 // Model data structure - vertices, normals, indices
 // [Algorithm-layer model data structure] - used for algorithm processing
 // Note: although PublicModel and PrivateModel share the same structure, they belong to different modules

@@ -1,0 +1,8 @@
+add_subdirectory(ModelLoadingTest)
+add_subdirectory(BoundaryDetectionTest)
+add_subdirectory(SlicePlaneDocumentTest)
+add_subdirectory(TrajectoryDocumentTest)
+add_subdirectory(TrajectoryConnectionDocumentTest)
+add_subdirectory(PoseTransformTest)
+add_subdirectory(OptiAlgorithmTest)
+add_subdirectory(BoundarylessUniformSlicingTest)

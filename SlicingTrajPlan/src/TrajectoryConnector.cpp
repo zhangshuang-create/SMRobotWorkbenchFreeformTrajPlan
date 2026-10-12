@@ -1,11 +1,6 @@
-#include <TrajectoryConnector/TrajectoryConnector.h>
-#include <RenderData/RenderData.h>
-#include <TrajectoryGenerator/TrajectoryGenerator.h>
-#include <QString>
+#include <SlicingTrajPlan/TrajectoryConnector.h>
 #include <algorithm>
 #include <cmath>
-#include <fstream>
-#include <limits>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -50,15 +45,6 @@ namespace ModelTrajPlan
         }
 
         return success;
-    }
-
-
-    bool TrajectoryConnector::initializeRenderer(ConnectionRenderData& renderData)
-    {
-        // No longer depends on scene (managed externally)
-        renderData.needsUpdate = true;
-
-        return true;
     }
 
     // [Addition] Convert trajectory points to grouped format (using sampled-point structure)
@@ -106,35 +92,6 @@ namespace ModelTrajPlan
         }
 
         return groupedTrajectoryPoints;
-    }
-
-
-    bool TrajectoryConnector::draw(ConnectionRenderData& renderData, const TrajData& trajData)
-    {
-        if (
-            !renderData.isVisible ||
-            trajData.connectionData_.connectionSegments_.empty()) {
-            return false;
-        }
-
-        // [REFACTOR] If connection is complete and data needs update, prepare render data
-        if (trajData.connectionData_.isConnected_ && renderData.needsUpdate) {
-            prepareRenderData(renderData, trajData.connectionData_.connectionSegments_);
-            renderData.needsUpdate = false;
-        }
-
-        // Draw the connection line model
-        if (renderData.connectionModel) {
-            renderData.connectionModel->draw();
-            return true;
-        }
-
-        return false;
-    }
-
-    void TrajectoryConnector::setConnectionVisibility(ConnectionRenderData& renderData, bool visible)
-    {
-        renderData.isVisible = visible;
     }
 
     // === State Query (All Static) ===
@@ -304,61 +261,5 @@ namespace ModelTrajPlan
         // its end back to index 1, producing an unwanted return stroke.
 
         return true;
-    }
-
-    void TrajectoryConnector::prepareRenderData(ConnectionRenderData& renderData,
-        const std::vector<ConnectionSegment>& connectionSegments)
-    {
-        //if (!renderData.getScene() || connectionSegments.empty()) {
-        //    return;
-        //}
-
-        // [REFACTOR] Use persistent model_data in RenderData directly, no temporary objects
-        convertConnectionSegmentsToModelData(connectionSegments, renderData.connectionData);
-
-        // Import data into rendering model
-        if (renderData.connectionModel && !renderData.connectionData.m_vertices.empty()) {
-            renderData.connectionModel->import(renderData.connectionData);
-        }
-    }
-
-    // [REFACTOR NEW] Convert connection segments to model_data format (return-by-value version)
-    MeshData TrajectoryConnector::convertConnectionSegmentsToModelData(
-        const std::vector<ConnectionSegment>& connectionSegments)
-    {
-        MeshData connectionData;
-        convertConnectionSegmentsToModelData(connectionSegments, connectionData);
-        return connectionData;
-    }
-
-    // [REFACTOR NEW] Convert connection segments to model_data format (reference-parameter version, avoids temporaries)
-    void TrajectoryConnector::convertConnectionSegmentsToModelData(
-        const std::vector<ConnectionSegment>& connectionSegments,
-        MeshData& connectionData)
-    {
-        connectionData.m_vertices.clear();
-        connectionData.m_indices.clear();
-
-        // Prepare vertex and index data for all connection segments
-        for (const auto& segment : connectionSegments) {
-            // Vertex data for start and end points (position + color)
-            connectionData.m_vertices.insert(connectionData.m_vertices.end(), {
-                static_cast<float>(segment.startPoint.x()),
-                static_cast<float>(segment.startPoint.y()),
-                static_cast<float>(segment.startPoint.z()),
-                segment.color.x(), segment.color.y(), segment.color.z(), 1.0f,  // RGBA
-
-                static_cast<float>(segment.endPoint.x()),
-                static_cast<float>(segment.endPoint.y()),
-                static_cast<float>(segment.endPoint.z()),
-                segment.color.x(), segment.color.y(), segment.color.z(), 1.0f   // RGBA
-                });
-
-            // Add indices for the line segment
-            unsigned int baseIndex = static_cast<unsigned int>(connectionData.m_vertices.size() / 7 - 2);
-            connectionData.m_indices.insert(connectionData.m_indices.end(), {
-                baseIndex, baseIndex + 1
-                });
-        }
     }
 }

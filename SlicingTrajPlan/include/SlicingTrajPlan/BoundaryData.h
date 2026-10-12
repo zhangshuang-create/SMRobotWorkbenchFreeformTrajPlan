@@ -3,7 +3,7 @@
 #include <vector>
 #include <string>
 #include <Eigen/Dense>
-#include <GeneralData/GeneralData_global.h>
+#include <SlicingTrajPlan/GeneralData_global.h>
 namespace ModelTrajPlan
 {
     // Boundary-line type enum - used to uniquely identify boundary-line type
@@ -88,11 +88,19 @@ namespace ModelTrajPlan
         ~BoundaryData();
 
         Epiphyseal intersectionPoints_;
+        // Orthogonal projection envelope used for slicing.  The fixed order is
+        // left outer contour, right outer contour, then their center line.
+        // Unlike intersectionPoints_, these curves are independent of the
+        // tessellation-specific mirror-plane intersection.
+        Epiphyseal projectedContourLines_;
         // The shorter of the two original curves produced by the one global
         // skeleton-cutting plane. It is the common phase-zero reference for
         // every closed contour, rather than a per-slice reference.
         std::vector<LinePoint> phaseReferenceLine_;
         Eigen::Vector3d phaseReferencePlaneNormal_ = Eigen::Vector3d::Zero();
+        // Mirror-plane projection envelope and projected end boundaries used
+        // only for visualization.
+        std::vector<BoundaryLine> referenceLines_;
         Epiphyseal LinePoints_;
         Epiphyseal Mainslicingnode;
         // Data members - public access, pure data container

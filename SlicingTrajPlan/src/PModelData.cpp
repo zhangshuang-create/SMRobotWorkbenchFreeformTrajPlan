@@ -1,4 +1,4 @@
-#include <GeneralData/PModelData.h>
+#include <SlicingTrajPlan/PModelData.h>
 #include <fstream>
 #include <iostream>
 namespace ModelTrajPlan

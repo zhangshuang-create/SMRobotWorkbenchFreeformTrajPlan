@@ -40,18 +40,14 @@ namespace SprayTrajPlan
         static std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>>
             getCombinedCutEdges(const OptCutsResult& result);
 
-        // Set OptCuts executable path
-        void setOptCutsExecutable(const std::string& exe_path);
-
-        // Set OptCuts root directory
+        // Set the workspace used for transient OptCuts input and output files.
         void setOptCutsRoot(const std::string& root_path);
 
     private:
-        std::string optcuts_exe_path_;
         std::string optcuts_root_path_;
 
-        // Run OptCuts process
-        bool runOptCutsProcess(const std::string& input_mesh, std::string& output_obj);
+        // Invoke the linked OptCuts DLL in-process.
+        bool runOptCutsAlgorithm(const std::string& input_mesh, std::string& output_obj);
 
         // Parse OptCuts output
         bool parseOptCutsOutput(const std::string& obj_path,

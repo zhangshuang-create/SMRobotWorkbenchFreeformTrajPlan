@@ -22,8 +22,7 @@ namespace SprayTrajPlan
         // Initialize the pipeline
         bool initialize();
 
-        // Set OptCuts paths
-        void setOptCutsExecutable(const std::string& exe_path);
+        // Set the workspace used for transient OptCuts input and output files.
         void setOptCutsRoot(const std::string& root_path);
 
         // Independently callable UI stages. Each preserves the previous valid result on failure.

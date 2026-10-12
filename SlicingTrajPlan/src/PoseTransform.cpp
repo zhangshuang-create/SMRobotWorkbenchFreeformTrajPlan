@@ -1,7 +1,14 @@
 // PoseTransform.cpp
-#include <PoseTransform/PoseTransform.h>
+#include <SlicingTrajPlan/PoseTransform.h>
+
+#include <assimp/Importer.hpp>
+#include <assimp/postprocess.h>
+#include <assimp/scene.h>
+
+#include <algorithm>
 #include <iostream>
 #include <cmath>
+#include <limits>
 
 // Define math constants
 #ifndef M_PI

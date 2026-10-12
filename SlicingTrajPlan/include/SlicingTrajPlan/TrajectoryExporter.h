@@ -1,13 +1,36 @@
 #pragma once
 
-#include <GeneralData/GeneralData.h>  // Use unified trajectory point definitions
+#include <SlicingTrajPlan/GeneralData.h>
 #include <vector>
 #include <string>
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
-#include <BurTrajPlan/BurTrajPlan_global.h>
+#include <SlicingTrajPlan/BurTrajPlan_global.h>
 namespace ModelTrajPlan
 {
+    struct FanucTcpDefinition
+    {
+        bool enabled = false;
+        double x = 0.0;
+        double y = 0.0;
+        double z = 0.0;
+        double w = 0.0;
+        double p = 0.0;
+        double r = 0.0;
+    };
+
+    struct AbbTcpDefinition
+    {
+        bool enabled = false;
+        double x = 0.0;
+        double y = 0.0;
+        double z = 0.0;
+        double q1 = 1.0;
+        double q2 = 0.0;
+        double q3 = 0.0;
+        double q4 = 0.0;
+    };
+
     /**
      * @brief Trajectory exporter class - exports trajectory data in multiple formats
      *
@@ -41,7 +64,7 @@ namespace ModelTrajPlan
          * @return Whether export succeeds
          */
         static bool exportFANUCProgram(const std::vector<TrajectoryPoint>& trajectoryPoints,
-            const std::string& filename);
+            const std::string& filename, const FanucTcpDefinition& tcp = {});
 
         /**
          * @brief Export ABB robot program
@@ -52,7 +75,7 @@ namespace ModelTrajPlan
          */
         static bool exportABBProgram(const std::vector<TrajectoryPoint>& trajectoryPoints,
             const std::string& txtFilename,
-            const std::string& modFilename);
+            const std::string& modFilename, const AbbTcpDefinition& tcp = {});
 
         /**
          * @brief Export to Excel/CSV format (basic - position and Euler angles only)

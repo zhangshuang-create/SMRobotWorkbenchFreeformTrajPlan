@@ -7,10 +7,10 @@
 #include <Eigen/Dense>
 
 // Include all data-structure headers
-#include "PModelData.h"
-#include "BoundaryData.h" 
-#include "PTrajData.h"
-#include "SlicingData.h"
+#include <SlicingTrajPlan/PModelData.h>
+#include <SlicingTrajPlan/BoundaryData.h>
+#include <SlicingTrajPlan/PTrajData.h>
+#include <SlicingTrajPlan/SlicingData.h>
 namespace ModelTrajPlan
 {
     // Data-state enum

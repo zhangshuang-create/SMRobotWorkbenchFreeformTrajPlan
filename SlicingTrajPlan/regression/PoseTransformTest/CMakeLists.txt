@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.20)
+
+add_executable(FreeformTrajPlanPoseTransformTest main.cpp)
+target_link_libraries(FreeformTrajPlanPoseTransformTest PRIVATE SMRobotSpray::SprayFreeformTrajPlan)
+target_compile_features(FreeformTrajPlanPoseTransformTest PRIVATE cxx_std_17)
+set_target_properties(FreeformTrajPlanPoseTransformTest PROPERTIES FOLDER tests/SMRobotSpray/SprayFreeformTrajPlan)
+add_test(NAME FreeformTrajPlanPoseTransformTest COMMAND $<TARGET_FILE:FreeformTrajPlanPoseTransformTest>)
+set_tests_properties(FreeformTrajPlanPoseTransformTest PROPERTIES LABELS "SMRobotSpray;SprayFreeformTrajPlan;PoseTransform;Registration")

@@ -15,6 +15,18 @@ set( GROUP_NAME ${PACKAGE_NAME} )
 # Component list (PCTrajWidgets, PlanDialog, ...) from collect_subdirs(src)
 include( ${CMAKE_CURRENT_SOURCE_DIR}/PackageConfigSetting.cmake )
 
+# OptCuts is hosted as an in-process algorithm DLL by TrajModule.
+if(NOT TARGET OptCutsCore)
+    add_subdirectory(optcut)
+endif()
+
+# The historical package option defaults this module to OFF. UV trajectory
+# planning is required by this workbench, so add the actual algorithm target
+# explicitly after its OptCuts DLL dependency is available.
+if(NOT TARGET TrajModule)
+    add_subdirectory(TrajModule)
+endif()
+
 #   Display all the components of this package
 message( STATUS "${PKG_MSG_HEADER} Package ${PACKAGE_NAME}'s Components include: ${${PACKAGE_NAME}_Components}" )
 foreach( comp_ ${${PACKAGE_NAME}_Components} )

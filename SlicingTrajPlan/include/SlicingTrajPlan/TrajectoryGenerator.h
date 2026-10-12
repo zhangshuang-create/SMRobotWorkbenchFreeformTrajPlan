@@ -1,12 +1,10 @@
 #pragma once
 
 #include "TrajectoryGenerator_global.h"
-#include <GeneralData/GeneralData.h>
+#include <SlicingTrajPlan/GeneralData.h>
 #include <vector>
 #include <string>
 #include <memory>
-#include <RenderData/TrajectoryRenderData.h>                  // Include RenderData
-#include <TrajData/TrajData.h>
 // Define PI constant
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -18,7 +16,6 @@ namespace ModelTrajPlan
     struct SliceResult;
     struct ModelData;
     struct EdgeExtractionResult;
-    struct RenderData;
 
     struct SectionProps {
         Eigen::Vector3d center;
@@ -51,30 +48,11 @@ namespace ModelTrajPlan
             TrajectoryGroupInfo& groupInfo,
             BoundaryData& boundaryData,
             SlicingData& slicingData,
-            TrajData& trajData,
-            PublicData::TrajData& PublictrajData);
-       
-        
-       bool convertToPublicTrajectoryWithTime(
-            const std::vector<TrajectoryPoint>& input,
-            PublicData::TrajectoryPoints& output
-        );
+            TrajData& trajData);
         // [ALGORITHM] Generate trajectory from edge points
         // Input: edgeResults - edge extraction results
         //        params - generation parameters
         // Output: trajectoryPoints - generated trajectory points
-
-        // === Rendering interface ===
-        // [RENDER] Draw trajectory visualization
-        // Input: renderData - render data container
-        //        trajectoryPoints - generated trajectory points
-        //        frameScale - coordinate frame scale for visualization
-        // Output: Updates renderData with trajectory rendering model
-        bool draw(TrajectoryRenderData& renderData,
-            const std::vector<TrajectoryPoint>& trajectoryPoints,
-            float frameScale = 30.0f) const;
-
-        bool initializeRenderer(TrajectoryRenderData& renderData);
 
     private:
         // [ALGORITHM] Internal helper methods (all methods take explicit parameters and do not depend on member state)

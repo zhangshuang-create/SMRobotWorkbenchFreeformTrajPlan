@@ -1,4 +1,4 @@
-#include <STLProcessor/STLProcessor.h>
+#include <SlicingTrajPlan/STLProcessor.h>
 #include <fstream>
 #include <iostream>
 #include <algorithm>
@@ -99,38 +99,6 @@ namespace ModelTrajPlan
         return true;
     }
 
-    // [Addition] Copy data from PublicModel to GeneralData
-    bool STLProcessor::copyFromPublicModel(const PublicData::PublicModel& publicModel,
-        ModelData& modelData)
-    {
-        // 1. Build PrivateModel
-        PrivateModel privateModel;
-        privateModel.m_vertices = publicModel.m_vertices;
-        privateModel.m_normals = publicModel.m_normals;
-        privateModel.m_indices = publicModel.m_indices;
-        privateModel.m_file_path = publicModel.m_file_path;
-        privateModel.m_file_name = publicModel.m_file_name;
-
-        // 2. Store into data container
-        modelData.mainModelData_ = privateModel;
-        modelData.allModelsData_.push_back(privateModel);
-
-        // 3. Record file path (if present)
-        if (!publicModel.m_file_path.empty()) {
-            modelData.loadedFilePaths_.push_back(publicModel.m_file_path);
-        }
-
-        // 4. Update statistics
-        modelData.totalTriangleCount_ = STLProcessor::getTriangleCount(privateModel);
-        modelData.totalVertexCount_ = STLProcessor::getVertexCount(privateModel);
-
-        // 5. Update status flags (within ModelData only)
-        modelData.hasValidModelData_ = true;
-        modelData.isModelLoaded_ = true;
-
-        return true;
-    }
-
     PrivateModel STLProcessor::parseSTLFile(const std::string& filePath)
     {
         PrivateModel modelData;
@@ -215,77 +183,6 @@ namespace ModelTrajPlan
     }
 
 
-    // ===================== Renderer =====================
-
-    bool STLProcessor::initializeRenderer(STLRenderData& renderData)
-    {
-        if (!renderData.meshModel) {
-            return false;
-        }
-
-        renderData.needsUpdate = true;
-        return true;
-    }
-
-
-    bool STLProcessor::draw(STLRenderData& renderData,
-        const ModelData& modelData)
-    {
-        if (!renderData.meshModel || !renderData.isVisible) {
-            return false;
-        }
-
-        if (renderData.needsUpdate) {
-            updateRenderData(renderData, modelData);
-            renderData.needsUpdate = false;
-        }
-
-        try {
-            renderData.meshModel->draw();
-            return true;
-        }
-        catch (const std::exception&) {
-            return false;
-        }
-    }
-
-
-    void STLProcessor::setVisibility(STLRenderData& renderData, bool visible)
-    {
-        renderData.isVisible = visible;
-    }
-
-
-    // ===================== Core Render Update =====================
-
-    void STLProcessor::updateRenderData(STLRenderData& renderData,
-        const ModelData& modelData)
-    {
-        if (!modelData.hasValidData()) {
-            return;
-        }
-
-        const PrivateModel& model = modelData.mainModelData_;
-
-        try {
-            // Fill persistent meshData directly
-            STLProcessor::convertModelToMeshData(model, renderData.meshData);
-
-            // Import to GPU
-            if (renderData.meshModel && !renderData.meshData.m_vertices.empty()) {
-                renderData.meshModel->import(renderData.meshData);
-
-                // Use default material (keep original behavior)
-                renderData.meshModel->use_material(MATERIAL_TYPE::GLOBAL,
-                    material_attr::MaterialGreen);
-            }
-
-        }
-        catch (const std::exception&) {
-            // Optional: add logging here
-        }
-    }
-
     bool STLProcessor::hasValidData(const ModelData& modelData)
     {
         // 1. Check whether the main model has vertices
@@ -319,54 +216,4 @@ namespace ModelTrajPlan
         modelData.isModelLoaded_ = false;
     }
 
-    // [STATIC] Static version of convertModelToMeshData for external use (return-by-value)
-    MeshData STLProcessor::convertModelToMeshData(const PrivateModel& modelData)
-    {
-        MeshData meshData;
-        convertModelToMeshData(modelData, meshData);
-        return meshData;
-    }
-
-    // [STATIC] Static version of convertModelToMeshData (reference-parameter version, avoids temporaries)
-    void STLProcessor::convertModelToMeshData(const PrivateModel& modelData, MeshData& meshData)
-    {
-        meshData.m_vertices.clear();
-        meshData.m_normals.clear();
-        meshData.m_colors.clear();
-        meshData.m_indices.clear();
-
-        // COLOR_MESH vertex data format: position + color (x,y,z,r,g,b,a)
-        size_t vertexCount = modelData.m_vertices.size() / 3;
-        meshData.m_vertices.reserve(vertexCount * 7); // 7 floats per vertex: x,y,z,r,g,b,a
-
-        // Set default STL mesh color (gray)
-        float r = 0.7f, g = 0.7f, b = 0.7f, a = 1.0f;
-
-        for (size_t i = 0; i < vertexCount; ++i) {
-            // Position data (x, y, z)
-            meshData.m_vertices.push_back(modelData.m_vertices[i * 3 + 0]);
-            meshData.m_vertices.push_back(modelData.m_vertices[i * 3 + 1]);
-            meshData.m_vertices.push_back(modelData.m_vertices[i * 3 + 2]);
-
-            // Color data (r, g, b, a)
-            meshData.m_vertices.push_back(r);
-            meshData.m_vertices.push_back(g);
-            meshData.m_vertices.push_back(b);
-            meshData.m_vertices.push_back(a);
-        }
-
-        // Copy index data
-        meshData.m_indices = modelData.m_indices;
-
-        if (modelData.m_normals.size() == vertexCount * 3) {
-            meshData.m_normals = modelData.m_normals;
-        } else {
-            meshData.m_normals.reserve(vertexCount * 3);
-            for (size_t i = 0; i < vertexCount; ++i) {
-                meshData.m_normals.push_back(0.0f);
-                meshData.m_normals.push_back(1.0f);
-                meshData.m_normals.push_back(0.0f);
-            }
-        }
-    }
 }

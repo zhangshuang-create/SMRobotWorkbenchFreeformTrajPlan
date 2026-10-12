@@ -3,23 +3,24 @@ cmake_minimum_required(VERSION 3.20)
 get_filename_component( TARGET_NAME ${CMAKE_CURRENT_SOURCE_DIR} NAME )
 message( STATUS "\n-------------  Config ${PACKAGE_NAME}::${TARGET_NAME}: ${CMAKE_CURRENT_SOURCE_DIR}  -------------" )
 
-file(GLOB SOURCES src/*.cpp src/*.c )
-list(REMOVE_ITEM SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp")
+file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS ../src/*.cpp ../src/*.c )
+list(REMOVE_ITEM SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/../src/main.cpp")
 if(SPRAYTRAJPLAN_HAS_CUDA)
-    list(APPEND SOURCES src/GpuMeshProjection.cu)
+    list(APPEND SOURCES ../src/GpuMeshProjection.cu)
 endif()
-file(GLOB HEADERS src/*.h src/*.hpp )
-file(GLOB INTERFACE_HEADERS include/${TARGET_NAME}/*.h include/${TARGET_NAME}/*.hpp )
+file(GLOB_RECURSE HEADERS CONFIGURE_DEPENDS ../src/*.h ../src/*.hpp )
+file(GLOB_RECURSE INTERFACE_HEADERS CONFIGURE_DEPENDS ../include/${PACKAGE_NAME}/*.h ../include/${PACKAGE_NAME}/*.hpp )
 
-cmake_path(SET abs_include_dir NORMALIZE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+cmake_path(SET abs_include_dir NORMALIZE "${CMAKE_CURRENT_SOURCE_DIR}/../include")
 
 add_library( ${TARGET_NAME} SHARED ${SOURCES} ${HEADERS} ${INTERFACE_HEADERS} )
 add_library( ${PACKAGE_NAME}::${TARGET_NAME} ALIAS ${TARGET_NAME})
 
 target_include_directories(${TARGET_NAME}
-    PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
     PRIVATE
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/${TARGET_NAME}>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include/${PACKAGE_NAME}>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../src>
         $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}/include>
 )
 
@@ -28,9 +29,6 @@ target_link_libraries ( ${TARGET_NAME}
     PRIVATE $<BUILD_INTERFACE:${${PACKAGE_NAME}${TARGET_NAME}_RequiredLibsPrivate}>
 )
 
-target_compile_definitions(${TARGET_NAME} PRIVATE
-    SPRAYTRAJPLAN_OPTCUTS_EXECUTABLE="${OptCuts_EXECUTABLE}"
-)
 if(SPRAYTRAJPLAN_HAS_CUDA)
     find_package(CUDAToolkit REQUIRED)
     target_link_libraries(${TARGET_NAME} PRIVATE CUDA::cudart)

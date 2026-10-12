@@ -1,5 +1,6 @@
 #include "OptCutsRunner.h"
 #include "MeshCutter.h"
+#include <OptCutsApi.h>
 #include <fstream>
 #include <sstream>
 #include <iostream>
@@ -10,7 +11,7 @@
 #include <cctype>
 #include <map>
 #include <tuple>
-#include <ProjectManager/json.hpp>
+#include <nlohmann/json.hpp>
 
 namespace SprayTrajPlan
 {
@@ -87,20 +88,10 @@ namespace SprayTrajPlan
         }
     }
 
-    OptCutsRunner::OptCutsRunner()
-    {
-#ifdef SPRAYTRAJPLAN_OPTCUTS_EXECUTABLE
-        optcuts_exe_path_ = SPRAYTRAJPLAN_OPTCUTS_EXECUTABLE;
-#endif
-    }
+    OptCutsRunner::OptCutsRunner() = default;
 
     OptCutsRunner::~OptCutsRunner()
     {
-    }
-
-    void OptCutsRunner::setOptCutsExecutable(const std::string& exe_path)
-    {
-        optcuts_exe_path_ = exe_path;
     }
 
     void OptCutsRunner::setOptCutsRoot(const std::string& root_path)
@@ -111,10 +102,6 @@ namespace SprayTrajPlan
     bool OptCutsRunner::loadOrRunOptCuts(const std::string& mesh_path, OptCutsResult& result)
     {
         if (isCachePath(mesh_path)) return loadCache(mesh_path, result);
-        if (optcuts_exe_path_.empty() || !std::filesystem::exists(optcuts_exe_path_)) {
-            std::cerr << "OptCuts executable is not configured or does not exist" << std::endl;
-            return false;
-        }
         const std::filesystem::path inputPath = std::filesystem::absolute(mesh_path);
         // A mesh selection always starts a fresh pre-cut and OptCuts run. A
         // cache is reused only when the user explicitly selects its .json
@@ -138,7 +125,7 @@ namespace SprayTrajPlan
         }
 
         const std::filesystem::path root = std::filesystem::absolute(optcuts_root_path_.empty()
-            ? std::filesystem::path(optcuts_exe_path_).parent_path().parent_path().parent_path()
+            ? std::filesystem::temp_directory_path() / "SMRobotOptCuts"
             : std::filesystem::path(optcuts_root_path_));
         const std::filesystem::path officialInput = root / "input" / (inputPath.stem().string() + "_uvprecut.obj");
         std::filesystem::path seamJson = officialInput;
@@ -153,7 +140,7 @@ namespace SprayTrajPlan
 
         std::string outputObj;
         std::cout << "Running OptCuts on pre-cut mesh " << officialInput << "..." << std::endl;
-        if (!runOptCutsProcess(officialInput.string(), outputObj)) return false;
+        if (!runOptCutsAlgorithm(officialInput.string(), outputObj)) return false;
         if (!parseOptCutsOutput(outputObj, seamJson.string(), candidate)) {
             std::cerr << "Failed to parse OptCuts output" << std::endl;
             return false;
@@ -233,13 +220,18 @@ namespace SprayTrajPlan
         }
     }
 
-    bool OptCutsRunner::runOptCutsProcess(const std::string& input_mesh, std::string& output_obj)
+    bool OptCutsRunner::runOptCutsAlgorithm(const std::string& input_mesh, std::string& output_obj)
     {
         const std::filesystem::path inputPath = std::filesystem::absolute(input_mesh);
         const std::filesystem::path root = std::filesystem::absolute(optcuts_root_path_.empty()
-            ? std::filesystem::path(optcuts_exe_path_).parent_path().parent_path().parent_path()
+            ? std::filesystem::temp_directory_path() / "SMRobotOptCuts"
             : std::filesystem::path(optcuts_root_path_));
         std::error_code error;
+        std::filesystem::create_directories(root, error);
+        if(error) {
+            std::cerr << "Unable to create the OptCuts workspace: " << root << std::endl;
+            return false;
+        }
         const std::filesystem::path relativeInput = std::filesystem::relative(inputPath, root, error);
         const std::string relativeInputString = relativeInput.generic_string();
         if (error || relativeInput.empty() || relativeInputString.compare(0, 2, "..") == 0) {
@@ -247,16 +239,32 @@ namespace SprayTrajPlan
             return false;
         }
 
-        // Match the official OptCuts batch interface used by the Python baseline.
-        std::ostringstream cmd;
-        cmd << "cd /d \"" << root.string() << "\" && \"" << optcuts_exe_path_ << "\" 10 \""
-            << relativeInput.generic_string() << "\" 0.999 1 0 4.1 1 0 python";
+        // Retain the established OptCuts parameter order, but call its exported
+        // DLL entry point directly. Mode 100 is its no-window batch mode.
+        std::vector<std::string> arguments = {
+            "OptCutsCore", "100", relativeInput.generic_string(), "0.999", "1",
+            "0", "4.1", "1", "0", "workbench"
+        };
+        std::vector<char*> argv;
+        argv.reserve(arguments.size());
+        for(auto& argument : arguments) {
+            argv.push_back(argument.data());
+        }
 
-        // Execute OptCuts
-        int result = std::system(cmd.str().c_str());
-
-        if (result != 0) {
-            std::cerr << "OptCuts execution failed with code " << result << std::endl;
+        const std::filesystem::path previousDirectory = std::filesystem::current_path(error);
+        if(error) {
+            std::cerr << "Unable to read the current working directory before running OptCuts" << std::endl;
+            return false;
+        }
+        std::filesystem::current_path(root, error);
+        if(error) {
+            std::cerr << "Unable to enter the OptCuts workspace: " << root << std::endl;
+            return false;
+        }
+        const int result = runOptCuts(static_cast<int>(argv.size()), argv.data());
+        std::filesystem::current_path(previousDirectory, error);
+        if(result != 0 || error) {
+            std::cerr << "OptCuts in-process execution failed with code " << result << std::endl;
             return false;
         }
 

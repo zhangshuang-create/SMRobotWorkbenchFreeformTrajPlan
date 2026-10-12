@@ -146,6 +146,86 @@ namespace SprayTrajPlan
             return true;
         }
 
+        bool isApproximatelyCircular(const std::vector<Eigen::Vector3d>& points)
+        {
+            if (points.size() < 8) return false;
+            Eigen::Vector3d center = Eigen::Vector3d::Zero();
+            for (const auto& point : points) center += point;
+            center /= static_cast<double>(points.size());
+            Eigen::Matrix3d covariance = Eigen::Matrix3d::Zero();
+            for (const auto& point : points) {
+                const Eigen::Vector3d delta = point - center;
+                covariance += delta * delta.transpose();
+            }
+            Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> solver(covariance);
+            if (solver.info() != Eigen::Success) return false;
+            const Eigen::Vector3d values = solver.eigenvalues();
+            return values[2] > 1e-12 && values[0] / values[2] <= 1e-4 &&
+                values[1] / values[2] >= 0.90;
+        }
+
+        bool fitGlobalCircularReferencePlane(const std::vector<Eigen::Vector3d>& vertices,
+            const BoundaryAnalyzer::BoundaryInfo& top,
+            const BoundaryAnalyzer::BoundaryInfo& bottom, Eigen::Vector3d& normalOut)
+        {
+            const Eigen::Vector3d axisDelta = top.center - bottom.center;
+            if (axisDelta.squaredNorm() <= 1e-18 || vertices.size() < 12) return false;
+            const Eigen::Vector3d axis = axisDelta.normalized();
+            constexpr size_t kMaxSamples = 600;
+            const size_t count = std::min(kMaxSamples, vertices.size());
+            std::vector<Eigen::Vector3d> samples;
+            samples.reserve(count);
+            for (size_t index = 0; index < count; ++index) {
+                samples.push_back(vertices[index * vertices.size() / count]);
+            }
+
+            Eigen::Vector3d centroid = Eigen::Vector3d::Zero();
+            for (const auto& point : samples) centroid += point;
+            centroid /= static_cast<double>(samples.size());
+            Eigen::Matrix3d covariance = Eigen::Matrix3d::Zero();
+            for (const auto& point : samples) {
+                const Eigen::Vector3d delta = point - centroid;
+                covariance += delta * delta.transpose();
+            }
+            Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> solver(covariance);
+            if (solver.info() != Eigen::Success) return false;
+
+            std::vector<Eigen::Vector3d> candidates;
+            for (int axisIndex = 0; axisIndex < 3; ++axisIndex) {
+                Eigen::Vector3d inPlane = solver.eigenvectors().col(axisIndex);
+                inPlane -= axis * axis.dot(inPlane);
+                if (inPlane.squaredNorm() <= 1e-12) continue;
+                const Eigen::Vector3d normal = axis.cross(inPlane).normalized();
+                bool duplicate = false;
+                for (const auto& candidate : candidates) {
+                    if (std::abs(candidate.dot(normal)) >= 1.0 - 1e-8) {
+                        duplicate = true;
+                        break;
+                    }
+                }
+                if (!duplicate) candidates.push_back(normal);
+            }
+
+            double bestScore = std::numeric_limits<double>::infinity();
+            Eigen::Vector3d bestNormal = Eigen::Vector3d::Zero();
+            for (const auto& normal : candidates) {
+                double score = 0.0;
+                for (const auto& point : samples) {
+                    const Eigen::Vector3d reflected = point - 2.0 *
+                        normal.dot(point - bottom.center) * normal;
+                    score += pointToSampleCloudSquaredDistance(reflected, samples);
+                }
+                score /= static_cast<double>(samples.size());
+                if (score < bestScore) {
+                    bestScore = score;
+                    bestNormal = normal;
+                }
+            }
+            if (!std::isfinite(bestScore) || bestNormal.squaredNorm() <= 1e-18) return false;
+            normalOut = bestNormal;
+            return true;
+        }
+
         std::vector<int> planeBoundaryCandidates(const std::vector<Eigen::Vector3d>& vertices,
             const std::vector<int>& loop, const Eigen::Vector3d& normal, double offset)
         {
@@ -574,7 +654,14 @@ namespace SprayTrajPlan
         const auto& bottomInfo = firstIsTop ? info2 : info1;
 
         Eigen::Vector3d planeNormal;
-        if (!fitReflectionSymmetryNormal(topInfo.points, planeNormal)) {
+        bool fitSucceeded = false;
+        if (isApproximatelyCircular(topInfo.points) && isApproximatelyCircular(bottomInfo.points)) {
+            fitSucceeded = fitGlobalCircularReferencePlane(vertices, topInfo, bottomInfo, planeNormal);
+        }
+        if (!fitSucceeded) {
+            fitSucceeded = fitReflectionSymmetryNormal(topInfo.points, planeNormal);
+        }
+        if (!fitSucceeded) {
             std::cerr << "Failed to fit UV pre-cut reflection symmetry plane" << std::endl;
             return false;
         }

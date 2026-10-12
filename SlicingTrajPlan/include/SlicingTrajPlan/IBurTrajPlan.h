@@ -1,16 +1,12 @@
 // Header file containing class IBurTrajPlan
 #pragma once
 
-#include "BurTrajPlan_global.h"
+#include <SlicingTrajPlan/BurTrajPlan_global.h>
 #include <memory>
 #include <vector>
 #include <string>
 #include <Eigen/Dense>
-#include <boost/shared_ptr.hpp>
-#include <GeneralData/GeneralData.h>// Addition: centralized definitions for TrajectoryPoint/CuttingPlane/DataState
-#include <RenderData/RenderData.h>  // Addition: rendering data structures
-#include <ModelData/ModelData.h>
-#include <TrajData/TrajData.h>
+#include <SlicingTrajPlan/GeneralData.h>
 
 namespace ModelTrajPlan
 
@@ -22,29 +18,18 @@ namespace ModelTrajPlan
     struct ConnectionSegment;
     struct EdgeExtractionResult;
     struct PrivateModel;
-    class iscene;
-    class imodel;
-
-    // Smart pointer type is provided by ModelTangQing (boost::shared_ptr)
-#include <ModelTangQing/iscene.h>
-#include <ModelTangQing/imodel.h>
-
-
 // Trajectory planning system interface - core data management
     class BurTrajPlan_SHAREDLIB IBurTrajPlan
     {
     protected:
         IBurTrajPlan() = default;  // Protected constructor, only callable by derived classes
     public:
-        virtual ~IBurTrajPlan() = 0;
+        virtual ~IBurTrajPlan() = default;
 
         // === Data management interfaces ===
         // File management
         virtual void getFilePaths(const GeneralData& generalData, std::vector<std::string>& filePaths) const = 0;
         virtual void clear(GeneralData& generalData) = 0;
-
-        // [Addition] Load data from PublicModel into GeneralData
-        virtual bool loadModelFromPublicData(const PublicData::PublicModel& publicModel, GeneralData& generalData) = 0;
 
         // Data state
         virtual void getCurrentState(const GeneralData& generalData, DataState& state) const = 0;
@@ -55,31 +40,8 @@ namespace ModelTrajPlan
         virtual void getTrajectoryPoints(const GeneralData& generalData, std::vector<TrajectoryPoint>& points) const = 0;
 
         // Cutting-plane generation
-        // Optional renderData: when non-null, boundary detection can fill intersection mesh into RenderData.
-        virtual bool generateCuttingPlanes(GeneralData& generalData, RenderData* renderData = nullptr) = 0;
+        virtual bool generateCuttingPlanes(GeneralData& generalData) = 0;
         virtual void getCuttingPlanes(const GeneralData& generalData, std::vector<CuttingPlane>& planes) const = 0;
-
-        // === Rendering interfaces (RenderData passed as argument) ===
-        // Initialize rendering system
-        virtual bool initializeRenderer(RenderData& renderData) = 0;
-
-        // Main draw method
-        virtual bool draw(const GeneralData& generalData, RenderData& renderData) = 0;
-
-        // Visibility controls
-        virtual void setOriginalDataVisibility(RenderData& renderData, bool visible) = 0;
-        virtual void setTrajectoryVisibility(RenderData& renderData, bool visible) = 0;
-        virtual void setCuttingPlanesVisibility(RenderData& renderData, bool visible) = 0;
-        virtual void setBoundaryVisibility(RenderData& renderData, bool visible) = 0;
-
-        // Addition: "keep original data visible after preprocessing" switch
-        virtual void setKeepOriginalVisibleAfterPreprocess(bool keep) = 0;
-
-        // Check state
-        virtual bool needsRenderUpdate(const RenderData& renderData) const = 0;
-
-        // Check whether renderable data exists
-        virtual bool hasRenderableData(const GeneralData& generalData, const RenderData& renderData) const = 0;
 
         // === Statistics interfaces ===
         virtual void getTotalPointCount(const GeneralData& generalData, size_t& count) const = 0;
@@ -103,9 +65,6 @@ namespace ModelTrajPlan
         // Parameter presets
         virtual bool applyCoarsePreset(GeneralData& generalData) = 0;
 
-        // === Static factory method - following iscene style ===
-        static boost::shared_ptr<IBurTrajPlan> create_trajplan();
-
         // Addition: custom slicing Z positions
         virtual bool setCustomZPositions(GeneralData& generalData, const std::vector<double>& zPositions) = 0;
         virtual void getCustomZPositions(const GeneralData& generalData, std::vector<double>& zPositions) const = 0;
@@ -123,8 +82,7 @@ namespace ModelTrajPlan
         // === Trajectory generation and export interfaces ===
         virtual bool generateMATLABTrajectory(GeneralData& generalData, int size_n,
             double z1Offset, double z2Offset,
-            double offsetDistance,
-            PublicData::TrajData& publicTrajData) = 0;
+            double offsetDistance) = 0;
 
         virtual bool exportTrajectoryToFile(const GeneralData& generalData, const std::string& filename) const = 0;
         virtual bool exportFANUCProgram(const GeneralData& generalData, const std::string& filename) const = 0;
@@ -134,10 +92,6 @@ namespace ModelTrajPlan
 
         // === Trajectory connection interfaces ===
         virtual bool connectTrajectoryPoints(GeneralData& generalData, ConnectionStrategy strategy = ConnectionStrategy::Sequential) = 0;
-        virtual bool setConnectionVisibility(RenderData& renderData, bool visible) = 0;
     };
-
-    // Typedef defined in iscene style
-    typedef boost::shared_ptr<IBurTrajPlan> IBurTrajPlan_spointer;
 
 }

@@ -13,7 +13,9 @@ message( STATUS "!!!!!!Package ${PACKAGE_NAME} configuration is set here!!!!!!" 
 ##########################################################################
 #   Package ${PACKAGE_NAME} components definition
 ##########################################################################
-set( ExcludeTargets )
+# optcut is a local implementation dependency, not a UVTrajPlan package
+# component. It is added explicitly before TrajModule.
+set( ExcludeTargets optcut )
 collect_subdirs(
     ${CMAKE_CURRENT_LIST_DIR}
     AllTargetNames

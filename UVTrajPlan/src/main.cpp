@@ -20,7 +20,6 @@ void printUsage(const char* program_name)
     std::cout << "  --trajectory-out <path>   Output CSV path\n";
     std::cout << "  --metadata-out <path>     Output metadata JSON path\n";
     std::cout << "  --paq-out <path>          Output PAQ trajectory path\n";
-    std::cout << "  --optcuts-exe <path>      Path to OptCuts executable\n";
     std::cout << "  --optcuts-root <path>     Path to OptCuts root directory\n";
     std::cout << "  --help                    Display this help message\n";
     std::cout << "\n";
@@ -41,7 +40,6 @@ int main(int argc, char* argv[])
     std::string output_csv;
     std::string output_metadata;
     std::string output_paq;
-    std::string optcuts_exe;
     std::string optcuts_root;
 
     for (int i = 1; i < argc; ++i) {
@@ -83,9 +81,6 @@ int main(int argc, char* argv[])
         }
         else if (arg == "--paq-out" && i + 1 < argc) {
             output_paq = argv[++i];
-        }
-        else if (arg == "--optcuts-exe" && i + 1 < argc) {
-            optcuts_exe = argv[++i];
         }
         else if (arg == "--optcuts-root" && i + 1 < argc) {
             optcuts_root = argv[++i];
@@ -139,9 +134,6 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    if (!optcuts_exe.empty()) {
-        pipeline.setOptCutsExecutable(optcuts_exe);
-    }
     if (!optcuts_root.empty()) {
         pipeline.setOptCutsRoot(optcuts_root);
     }

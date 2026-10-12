@@ -104,16 +104,10 @@ namespace ModelTrajPlan
     ModelTrajPlanManage::ModelTrajPlanManage(
         GeneralData& generalData,
         PublicData::PublicModelData& publicModelData,
-        PublicData::TrajData& publicTrajData,
-        PublicData::PublicDataRender& publicRenderData,
-        IBurTrajPlan_spointer burTrajPlan,
-        RenderData& renderData)
+        PublicData::TrajData& publicTrajData)
         : generalData_(generalData)
         , publicModelData_(publicModelData)
         , publicTrajData_(publicTrajData)
-        , publicRenderData_(publicRenderData)
-        , burTrajPlan_(burTrajPlan)
-        , renderData_(renderData)
     {
     }
 
@@ -200,11 +194,6 @@ namespace ModelTrajPlan
         {
             generalData_.filePaths_ = loadedPaths;
         }
-        rebuildPublicRenderableData();
-        if (burTrajPlan_)
-        {
-            initializeRendererAndRestoreVisibility(*burTrajPlan_, generalData_, renderData_);
-        }
         return true;
     }
 
@@ -229,9 +218,7 @@ namespace ModelTrajPlan
             { "is_boundary_detected", generalData_.processingState_.isBoundaryDetected },
             { "is_slicing_completed", generalData_.processingState_.isSlicingCompleted },
             { "is_trajectory_generated", generalData_.processingState_.isTrajectoryGenerated },
-            { "is_trajectory_connected", generalData_.processingState_.isTrajectoryConnected },
-            { "keep_original_visible_after_preprocess", generalData_.processingState_.keepOriginalVisibleAfterPreprocess },
-            { "original_data_visible", generalData_.processingState_.originalDataVisible }
+            { "is_trajectory_connected", generalData_.processingState_.isTrajectoryConnected }
         };
 
         if (hasGeneralModelData(generalData_))
@@ -371,8 +358,6 @@ namespace ModelTrajPlan
             if (p.contains("is_slicing_completed")) generalData_.processingState_.isSlicingCompleted = p["is_slicing_completed"].get<bool>();
             if (p.contains("is_trajectory_generated")) generalData_.processingState_.isTrajectoryGenerated = p["is_trajectory_generated"].get<bool>();
             if (p.contains("is_trajectory_connected")) generalData_.processingState_.isTrajectoryConnected = p["is_trajectory_connected"].get<bool>();
-            if (p.contains("keep_original_visible_after_preprocess")) generalData_.processingState_.keepOriginalVisibleAfterPreprocess = p["keep_original_visible_after_preprocess"].get<bool>();
-            if (p.contains("original_data_visible")) generalData_.processingState_.originalDataVisible = p["original_data_visible"].get<bool>();
         }
 
         if (j.contains("modelDataManager"))
@@ -569,44 +554,4 @@ namespace ModelTrajPlan
         }
     }
 
-    bool ModelTrajPlanManage::initializeRendererAndRestoreVisibility(
-        IBurTrajPlan& burPlan,
-        const GeneralData& generalData,
-        RenderData& renderData)
-    {
-        if (!burPlan.initializeRenderer(renderData))
-        {
-            return false;
-        }
-
-        const bool hasModel = !generalData.modelDataManager_.mainModelData_.m_vertices.empty();
-        const bool hasSlices = !generalData.slicingData_.cuttingPlanes_.empty();
-        const bool hasTraj = !generalData.trajData_.trajectoryPoints_.empty();
-
-        burPlan.setOriginalDataVisibility(renderData, hasModel);
-        burPlan.setBoundaryVisibility(renderData, hasSlices);
-        burPlan.setCuttingPlanesVisibility(renderData, hasSlices);
-        burPlan.setTrajectoryVisibility(renderData, hasTraj);
-        burPlan.setConnectionVisibility(
-            renderData, !generalData.trajData_.connectionData_.connectedTrajectory_.empty());
-
-        return true;
-    }
-
-    void ModelTrajPlanManage::rebuildPublicRenderableData()
-    {
-        publicRenderData_.m_PublicSTLRenderData.needsUpdate = true;
-        publicRenderData_.m_PublicTrajectoryRenderData.needsUpdate = true;
-
-        if (publicRenderData_.m_PublicSTLRenderData.meshModel)
-        {
-            PublicData::PublicDataRender::drawPublicModel(
-                publicRenderData_.m_PublicSTLRenderData, publicModelData_);
-        }
-        if (publicRenderData_.m_PublicTrajectoryRenderData.trajectoryModel)
-        {
-            PublicData::PublicDataRender::drawPublicTrajectory(
-                publicRenderData_.m_PublicTrajectoryRenderData, publicTrajData_);
-        }
-    }
 }

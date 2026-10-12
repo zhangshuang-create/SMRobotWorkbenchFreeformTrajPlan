@@ -1,4 +1,4 @@
-#include <GeneralData/BoundaryData.h>
+#include <SlicingTrajPlan/BoundaryData.h>
 #include <algorithm>
 namespace ModelTrajPlan
 {

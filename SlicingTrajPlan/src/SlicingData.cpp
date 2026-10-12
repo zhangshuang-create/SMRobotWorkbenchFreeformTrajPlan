@@ -1,4 +1,4 @@
-#include <GeneralData/SlicingData.h>
+#include <SlicingTrajPlan/SlicingData.h>
 namespace ModelTrajPlan
 {
     SlicingData::SlicingData()

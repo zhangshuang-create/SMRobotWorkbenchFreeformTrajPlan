@@ -1,28 +1,33 @@
-// --- START OF FILE: BoundaryDetector.cpp ---
+#include <SlicingTrajPlan/BoundaryDetector.h>
+#include <SlicingTrajPlan/STLProcessor.h>
+#include <SlicingTrajPlan/BoundaryPlaneGeometry.h>
 
-#include <BoundaryDetector/BoundaryDetector.h>
-#include <RenderData/RenderData.h>
-#include <STLProcessor/STLProcessor.h>
-#include <Eigen/Dense>
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <iostream>
 #include <limits>
 #include <map>
-#include <unordered_set>
-#include <vector>
-// OpenGL
-#include <GL/glew.h>
-#include <ModelTangQing/imodel.h>
-#include <ModelTangQing/MeshData.h>
-#include <ModelTangQing/iscene.h>
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif
-
 #include <set>
-namespace ModelTrajPlan
+#include <unordered_set>
+
+bool Vector3dLexicographicalCompare::operator()(const Eigen::Vector3d& left, const Eigen::Vector3d& right) const
+{
+    constexpr double epsilon = 1.0e-9;
+    if(std::abs(left.x() - right.x()) > epsilon) return left.x() < right.x();
+    if(std::abs(left.y() - right.y()) > epsilon) return left.y() < right.y();
+    if(std::abs(left.z() - right.z()) > epsilon) return left.z() < right.z();
+    return false;
+}
+
+bool PairOfVector3dCompare::operator()(const std::pair<Eigen::Vector3d, Eigen::Vector3d>& left,
+    const std::pair<Eigen::Vector3d, Eigen::Vector3d>& right) const
+{
+    Vector3dLexicographicalCompare compare;
+    if(compare(left.first, right.first)) return true;
+    if(compare(right.first, left.first)) return false;
+    return compare(left.second, right.second);
+}namespace ModelTrajPlan
 {
     namespace
     {
@@ -181,6 +186,262 @@ namespace ModelTrajPlan
             normalOut.normalize();
             return true;
         }
+
+        bool appendProjectedOuterContour(const ModelData& modelData,
+            const Eigen::Vector3d& planeOrigin, const Eigen::Vector3d& planeNormal,
+            const BoundaryLine& lowerBoundary, const BoundaryLine& upperBoundary,
+            Epiphyseal& projectedContourLines,
+            std::vector<BoundaryLine>& referenceLines)
+        {
+            const size_t triangleCount = STLProcessor::getTriangleCount(modelData.mainModelData_);
+            if(triangleCount == 0 || planeNormal.squaredNorm() <= 1e-18) return false;
+
+            const Eigen::Vector3d normal = planeNormal.normalized();
+            Eigen::Vector3d height = upperBoundary.center - planeOrigin;
+            height -= normal * height.dot(normal);
+            if(height.squaredNorm() <= 1e-18) return false;
+            height.normalize();
+            const Eigen::Vector3d lateral = height.cross(normal).normalized();
+
+            struct ProjectedTriangle { Eigen::Vector2d vertices[3]; };
+            std::vector<ProjectedTriangle> triangles;
+            triangles.reserve(triangleCount);
+            double minX = std::numeric_limits<double>::infinity();
+            double maxX = -minX;
+            double minY = minX;
+            double maxY = -minX;
+            for(size_t index = 0; index < triangleCount; ++index) {
+                Eigen::Vector3d vertices[3];
+                STLProcessor::getTriangleVertices(modelData.mainModelData_, index, vertices);
+                ProjectedTriangle triangle;
+                for(int vertex = 0; vertex < 3; ++vertex) {
+                    const Eigen::Vector3d delta = vertices[vertex] - planeOrigin;
+                    triangle.vertices[vertex] = { delta.dot(lateral), delta.dot(height) };
+                    minX = std::min(minX, triangle.vertices[vertex].x());
+                    maxX = std::max(maxX, triangle.vertices[vertex].x());
+                    minY = std::min(minY, triangle.vertices[vertex].y());
+                    maxY = std::max(maxY, triangle.vertices[vertex].y());
+                }
+                triangles.push_back(triangle);
+            }
+            if(maxX - minX <= 1e-10 || maxY - minY <= 1e-10) return false;
+
+            constexpr int kScanLineCount = 600;
+            std::vector<Eigen::Vector3d> left;
+            std::vector<Eigen::Vector3d> right;
+            left.reserve(kScanLineCount);
+            right.reserve(kScanLineCount);
+            for(int row = 0; row < kScanLineCount; ++row) {
+                const double y = minY + (maxY - minY) * (static_cast<double>(row) + 0.5) /
+                    static_cast<double>(kScanLineCount);
+                double leftmost = std::numeric_limits<double>::infinity();
+                double rightmost = -leftmost;
+                for(const auto& triangle : triangles) {
+                    double intersections[3];
+                    int count = 0;
+                    for(int edge = 0; edge < 3; ++edge) {
+                        const Eigen::Vector2d& a = triangle.vertices[edge];
+                        const Eigen::Vector2d& b = triangle.vertices[(edge + 1) % 3];
+                        if((a.y() <= y && y < b.y()) || (b.y() <= y && y < a.y())) {
+                            intersections[count++] = a.x() +
+                                (y - a.y()) * (b.x() - a.x()) / (b.y() - a.y());
+                        }
+                    }
+                    if(count == 2) {
+                        leftmost = std::min(leftmost, std::min(intersections[0], intersections[1]));
+                        rightmost = std::max(rightmost, std::max(intersections[0], intersections[1]));
+                    }
+                }
+                if(std::isfinite(leftmost) && std::isfinite(rightmost)) {
+                    left.push_back(planeOrigin + leftmost * lateral + y * height);
+                    right.push_back(planeOrigin + rightmost * lateral + y * height);
+                }
+            }
+            if(left.size() < 2 || right.size() < 2) return false;
+
+            // The scan envelope also includes the sloping end caps. Remove
+            // those BEFORE pairing; otherwise both curves finish at the same
+            // extreme cap vertex and their midpoint collapses onto one side.
+            std::vector<std::vector<Eigen::Vector3d>> rims;
+            for (const BoundaryLine* boundary : { &lowerBoundary, &upperBoundary }) {
+                std::vector<Eigen::Vector3d> rim;
+                for (const auto& point : boundary->points)
+                    rim.push_back(point.position - normal.dot(point.position - planeOrigin) * normal);
+                if (rim.size() < 2) return false;
+                rims.push_back(std::move(rim));
+            }
+            const double capTolerance = std::max(1e-4,
+                std::hypot(maxX - minX, maxY - minY) * 1e-3);
+            const auto onCap = [&](const Eigen::Vector3d& p) {
+                for (const auto& rim : rims) {
+                    for (size_t i = 0; i < rim.size(); ++i) {
+                        const auto& a = rim[i];
+                        const Eigen::Vector3d edge = rim[(i + 1) % rim.size()] - a;
+                        const double t = edge.squaredNorm() > 1e-18 ?
+                            std::clamp((p - a).dot(edge) / edge.squaredNorm(), 0.0, 1.0) : 0.0;
+                        if ((p - a - t * edge).norm() <= capTolerance) return true;
+                    }
+                }
+                return false;
+            };
+            const auto trimSide = [&](std::vector<Eigen::Vector3d>& side) {
+                // Follow the longest continuous side run. Any return onto a
+                // rim terminates the run, including cap fragments that leave
+                // the tolerance band again near an extreme vertex.
+                size_t first = 0, last = 0, runStart = 0;
+                double bestLength = -1.0, runLength = 0.0;
+                for (size_t i = 0; i <= side.size(); ++i) {
+                    if (i == side.size() || onCap(side[i])) {
+                        if (i - runStart >= 2 && runLength > bestLength) {
+                            first = runStart; last = i; bestLength = runLength;
+                        }
+                        runStart = i + 1;
+                        runLength = 0.0;
+                    } else if (i > runStart) {
+                        runLength += (side[i] - side[i - 1]).norm();
+                    }
+                }
+                if (last - first < 2) return false;
+                std::vector<Eigen::Vector3d> trimmed(side.begin() + first, side.begin() + last);
+                // Extend only the local outgoing tangent to the first nearby
+                // rim intersection. Never connect to a global rim extremum:
+                // that can reverse direction and create a false corner.
+                const auto endpoint = [&](bool lower) -> Eigen::Vector3d {
+                    const size_t end = lower ? 0 : trimmed.size() - 1;
+                    const size_t inward = lower ? std::min<size_t>(3, trimmed.size() - 1)
+                                                : trimmed.size() - 1 - std::min<size_t>(3, trimmed.size() - 1);
+                    const Eigen::Vector3d p = trimmed[end];
+                    Eigen::Vector3d direction = p - trimmed[inward];
+                    const double localLength = direction.norm();
+                    if (localLength <= 1e-10) return p;
+                    direction /= localLength;
+                    double bestDistance = 2.0 * localLength + capTolerance;
+                    Eigen::Vector3d result = p;
+                    const auto& rim = rims[lower ? 0 : 1];
+                    for (size_t i = 0; i < rim.size(); ++i) {
+                        const Eigen::Vector3d a = rim[i];
+                        const Eigen::Vector3d edge = rim[(i + 1) % rim.size()] - a;
+                        const double denominator = direction.cross(edge).dot(normal);
+                        if (std::abs(denominator) < 1e-12) continue;
+                        const double distance = (a - p).cross(edge).dot(normal) / denominator;
+                        const double t = (a - p).cross(direction).dot(normal) / denominator;
+                        if (distance >= 0.0 && distance < bestDistance && t >= -1e-8 && t <= 1.0 + 1e-8) {
+                            bestDistance = distance;
+                            result = p + distance * direction;
+                        }
+                    }
+                    return result;
+                };
+                const Eigen::Vector3d lowerEnd = endpoint(true);
+                const Eigen::Vector3d upperEnd = endpoint(false);
+                if ((lowerEnd - trimmed.front()).norm() > 1e-8) trimmed.insert(trimmed.begin(), lowerEnd);
+                if ((upperEnd - trimmed.back()).norm() > 1e-8) trimmed.push_back(upperEnd);
+                side.swap(trimmed);
+                return true;
+            };
+            if (!trimSide(left) || !trimSide(right)) return false;
+
+            // Align endpoints, then pair equal fractions of each side's length.
+            const auto orientLowerToUpper = [&](std::vector<Eigen::Vector3d>& contour) {
+                if ((contour.front() - planeOrigin).dot(height) >
+                    (contour.back() - planeOrigin).dot(height)) {
+                    std::reverse(contour.begin(), contour.end());
+                }
+            };
+            std::vector<Eigen::Vector3d> alignedLeft = left;
+            std::vector<Eigen::Vector3d> alignedRight = right;
+            orientLowerToUpper(alignedLeft);
+            orientLowerToUpper(alignedRight);
+
+            const auto resampleNormalized = [&](const std::vector<Eigen::Vector3d>& contour,
+                const size_t sampleCount) {
+                std::vector<Eigen::Vector3d> samples;
+                samples.reserve(sampleCount);
+                std::vector<double> arc(contour.size(), 0.0);
+                for (size_t i = 1; i < contour.size(); ++i)
+                    arc[i] = arc[i - 1] + (contour[i] - contour[i - 1]).norm();
+                size_t segment = 0;
+                for(size_t sample = 0; sample < sampleCount; ++sample) {
+                    const double target = arc.back() * static_cast<double>(sample) /
+                        static_cast<double>(sampleCount - 1);
+                    while(segment + 1 < contour.size() - 1 &&
+                        arc[segment + 1] < target) ++segment;
+                    const double startHeight = arc[segment];
+                    const double endHeight = arc[segment + 1];
+                    const double heightDelta = endHeight - startHeight;
+                    const double ratio = heightDelta > 1e-12 ?
+                        (target - startHeight) / heightDelta : 0.0;
+                    samples.push_back((1.0 - ratio) * contour[segment] + ratio * contour[segment + 1]);
+                }
+                samples.front() = contour.front();
+                samples.back() = contour.back();
+                return samples;
+            };
+            const size_t pairedSampleCount = std::max(alignedLeft.size(), alignedRight.size());
+            const std::vector<Eigen::Vector3d> pairedLeft =
+                resampleNormalized(alignedLeft, pairedSampleCount);
+            const std::vector<Eigen::Vector3d> pairedRight =
+                resampleNormalized(alignedRight, pairedSampleCount);
+
+            projectedContourLines.clear();
+            projectedContourLines.resize(3);
+            for(size_t index = 0; index < pairedSampleCount; ++index) {
+                LinePoint leftPoint;
+                leftPoint.position = pairedLeft[index];
+                leftPoint.index = index;
+                projectedContourLines[0].push_back(leftPoint);
+
+                LinePoint rightPoint;
+                rightPoint.position = pairedRight[index];
+                rightPoint.index = index;
+                projectedContourLines[1].push_back(rightPoint);
+
+                LinePoint centerPoint;
+                centerPoint.position = 0.5 * (pairedLeft[index] + pairedRight[index]);
+                centerPoint.index = index;
+                projectedContourLines[2].push_back(centerPoint);
+            }
+
+            Eigen::Vector3d minimum = Eigen::Vector3d::Constant(std::numeric_limits<double>::infinity());
+            Eigen::Vector3d maximum = -minimum;
+            for(const auto& point : left) { minimum = minimum.cwiseMin(point); maximum = maximum.cwiseMax(point); }
+            for(const auto& point : right) { minimum = minimum.cwiseMin(point); maximum = maximum.cwiseMax(point); }
+            const double diagonal = (maximum - minimum).norm();
+            const Eigen::Vector3d redOffset = normal * std::max(1e-4, diagonal * 1e-4);
+            const Eigen::Vector3d yellowOffset = redOffset;
+            const auto appendLine = [&](const std::vector<Eigen::Vector3d>& points,
+                const Eigen::Vector3f& color, const char* name) {
+                if(points.size() < 2) return;
+                BoundaryLine line{};
+                line.color = color;
+                line.name = name;
+                line.Type = BoundaryLineType::SlicePlane;
+                line.points.reserve(points.size());
+                for(size_t index = 0; index < points.size(); ++index) {
+                    line.points.push_back({ points[index], 0.0, index });
+                }
+                referenceLines.push_back(std::move(line));
+            };
+            const auto appendRedSide = [&](const std::vector<Eigen::Vector3d>& side, bool reverse) {
+                std::vector<Eigen::Vector3d> visible;
+                visible.reserve(side.size());
+                for(size_t index = 0; index < side.size(); ++index) {
+                    visible.push_back(side[reverse ? (side.size() - 1 - index) : index] + redOffset);
+                }
+                appendLine(visible, Eigen::Vector3f(1.0f, 0.0f, 0.0f), "Projected outer contour");
+            };
+            appendRedSide(left, false);
+            appendRedSide(right, true);
+            std::vector<Eigen::Vector3d> center;
+            center.reserve(pairedSampleCount);
+            for(size_t index = 0; index < pairedSampleCount; ++index) {
+                center.push_back(0.5 * (pairedLeft[index] + pairedRight[index]) + yellowOffset);
+            }
+            appendLine(center, Eigen::Vector3f(1.0f, 1.0f, 0.0f),
+                "Projected contour center reference");
+            return true;
+        }
+
     }
 
 
@@ -188,6 +449,8 @@ namespace ModelTrajPlan
     {
         // [DESIGN] Pure algorithm class - no internal data storage
     }
+
+    BoundaryDetector::~BoundaryDetector() = default;
 
     std::map<std::pair<Eigen::Vector3d, Eigen::Vector3d>, int, PairOfVector3dCompare>
         BoundaryDetector::getEdgeCountMap(const ModelData& modelData) {
@@ -217,12 +480,28 @@ namespace ModelTrajPlan
     {
         boundary2.clear();
 
-        // Fit the upper rim's physical left-right mirror normal by reflecting
-        // samples onto its continuous closed polyline.  The fitted offset is
-        // intentionally not used below: the cutting plane must pass through
-        // the lower boundary center.
         Eigen::Vector3d planeNormal;
-        if (!fitReflectionSymmetryNormal(upperBoundary, planeNormal)) {
+        Eigen::Vector3d upperCenter = upperBoundary.center;
+        Eigen::Vector3d lowerCenter = lowerBoundary.center;
+        const bool upperCircular = fitBoundaryCircle(upperBoundary, upperCenter);
+        const bool lowerCircular = fitBoundaryCircle(lowerBoundary, lowerCenter);
+        bool fitSucceeded = false;
+        if(upperCircular && lowerCircular) {
+            fitSucceeded = circularBoundaryPlane(lowerBoundary, upperBoundary,
+                lowerCenter, upperCenter, planeNormal);
+        } else {
+            // One circular rim: analyze only the noncircular rim. Two
+            // noncircular rims: use the consistently assigned second rim.
+            const auto& source = upperCircular ? lowerBoundary : upperBoundary;
+            fitSucceeded = fitReflectionSymmetryNormal(source, planeNormal);
+            const Eigen::Vector3d axis = upperCenter - lowerCenter;
+            if(fitSucceeded && axis.squaredNorm() > 1e-18) {
+                planeNormal -= axis * planeNormal.dot(axis) / axis.squaredNorm();
+                fitSucceeded = planeNormal.norm() > 1e-8;
+                if(fitSucceeded) planeNormal.normalize();
+            } else fitSucceeded = false;
+        }
+        if (!fitSucceeded) {
             return false;
         }
         if (phasePlaneNormal) {
@@ -235,7 +514,7 @@ namespace ModelTrajPlan
         double a = planeNormal.x();
         double b = planeNormal.y();
         double c = planeNormal.z();
-        const Eigen::Vector3d& planeOrigin = lowerBoundary.center;
+        const Eigen::Vector3d& planeOrigin = lowerCenter;
         double d = -(a * planeOrigin.x() + b * planeOrigin.y() + c * planeOrigin.z());
 
         // ==========================================================
@@ -761,17 +1040,77 @@ namespace ModelTrajPlan
         const Epiphyseal& lines,        // original dense lines: lines[0], lines[1], lines[2]
         const Epiphyseal& Pointnode,    // adaptive sparse points from side lines
         Epiphyseal& slicingnode,
-        const double min_step)
+        const double min_step,
+        const int maxSliceCount)
     {
         slicingnode.clear();
 
         if (lines.size() < 3 || Pointnode.size() < 2)
             return false;
 
+        // Projected envelopes have exact scan-row correspondence. Preserve it:
+        // independent arc-length interpolation moves selected corners and pairs
+        // side points from different heights.
+        bool paired = lines[0].size() == lines[2].size() &&
+            lines[1].size() == lines[2].size() && lines[2].size() >= 2;
+        for (size_t i = 0; paired && i < lines[2].size(); ++i) {
+            paired = (lines[2][i].position - 0.5 *
+                (lines[0][i].position + lines[1][i].position)).norm() < 1e-7;
+        }
+        if (paired) {
+            const auto& center = lines[2];
+            std::vector<double> arc(center.size(), 0.0);
+            for (size_t i = 1; i < center.size(); ++i)
+                arc[i] = arc[i - 1] + (center[i].position - center[i - 1].position).norm();
+            std::vector<size_t> candidates;
+            for (size_t i = 1; i + 1 < center.size(); ++i) candidates.push_back(i);
+            const auto turn = [&](size_t i) {
+                const Eigen::Vector3d a = center[i].position - center[i - 1].position;
+                const Eigen::Vector3d b = center[i + 1].position - center[i].position;
+                return 1.0 - std::clamp(a.normalized().dot(b.normalized()), -1.0, 1.0);
+            };
+            std::stable_sort(candidates.begin(), candidates.end(), [&](size_t a, size_t b) {
+                const bool ac = turn(a) > 1.0 - 0.996194698;
+                const bool bc = turn(b) > 1.0 - 0.996194698;
+                if (ac != bc) return ac;
+                if (ac && std::abs(turn(a) - turn(b)) > 1e-12) return turn(a) > turn(b);
+                return center[a].curvature > center[b].curvature;
+            });
+            std::vector<size_t> selected{0, center.size() - 1};
+            for (size_t i : candidates) {
+                bool adaptiveCandidate = false;
+                if (Pointnode.size() > 2) {
+                    for (const auto& node : Pointnode[2])
+                        if ((node.position - center[i].position).norm() < 1e-7) adaptiveCandidate = true;
+                }
+                if (!adaptiveCandidate && turn(i) <= 1.0 - 0.996194698) continue;
+                if (center[i].curvature < 1e-3 && turn(i) < 1.0 - 0.996194698) continue;
+                bool separated = true;
+                for (size_t j : selected)
+                    if (std::abs(arc[i] - arc[j]) < std::max(1e-6, min_step)) separated = false;
+                if (!separated) continue;
+                selected.push_back(i);
+                if (maxSliceCount > 0 && selected.size() >= static_cast<size_t>(maxSliceCount) + 2) break;
+            }
+            std::sort(selected.begin(), selected.end());
+            slicingnode.resize(3);
+            for (size_t i : selected)
+                for (size_t side = 0; side < 3; ++side) slicingnode[side].push_back(lines[side][i]);
+            return true;
+        }
+
         // ============================
-        // 1) Select sparse reference line (the denser of Pointnode[0/1])
+        // 1) Use the fitted center line (Pointnode[2]) as the primary
+        // reference. It represents the center of the ribbon and produces
+        // better-balanced slice placement than either side boundary alone.
+        // Keep the side-line choice only as a fallback for incomplete input.
         // ============================
-        int ref_id = (Pointnode[0].size() > Pointnode[1].size()) ? 0 : 1;
+        int ref_id = 0;
+        if (Pointnode.size() > 2 && Pointnode[2].size() >= 2) {
+            ref_id = 2;
+        } else if (Pointnode[1].size() >= Pointnode[0].size()) {
+            ref_id = 1;
+        }
         std::vector<LinePoint> refSparse = Pointnode[ref_id];
 
         if (refSparse.size() < 2)
@@ -795,6 +1134,70 @@ namespace ModelTrajPlan
 
         if (refSparse.size() < 2)
             return false;
+
+        if (maxSliceCount > 0 && refSparse.size() > 2) {
+            struct SliceCandidate {
+                size_t index;
+                bool isCorner;
+                double turnSeverity;
+                double curvature;
+            };
+
+            constexpr double kCornerCosThreshold = 0.996194698; // 5 degrees
+            std::vector<SliceCandidate> candidates;
+            candidates.reserve(refSparse.size() - 2);
+
+            for (size_t i = 1; i + 1 < refSparse.size(); ++i) {
+                Eigen::Vector3d incoming = refSparse[i].position - refSparse[i - 1].position;
+                Eigen::Vector3d outgoing = refSparse[i + 1].position - refSparse[i].position;
+                double cosine = 1.0;
+                if (incoming.norm() > 1e-8 && outgoing.norm() > 1e-8) {
+                    incoming.normalize();
+                    outgoing.normalize();
+                    cosine = std::clamp(incoming.dot(outgoing), -1.0, 1.0);
+                }
+
+                candidates.push_back({
+                    i,
+                    cosine < kCornerCosThreshold,
+                    1.0 - cosine,
+                    std::max(0.0, refSparse[i].curvature)
+                });
+            }
+
+            std::stable_sort(candidates.begin(), candidates.end(), [](const SliceCandidate& lhs,
+                                                                         const SliceCandidate& rhs) {
+                if (lhs.isCorner != rhs.isCorner) return lhs.isCorner > rhs.isCorner;
+                if (lhs.isCorner && std::abs(lhs.turnSeverity - rhs.turnSeverity) > 1e-12) {
+                    return lhs.turnSeverity > rhs.turnSeverity;
+                }
+                if (std::abs(lhs.curvature - rhs.curvature) > 1e-12) {
+                    return lhs.curvature > rhs.curvature;
+                }
+                if (std::abs(lhs.turnSeverity - rhs.turnSeverity) > 1e-12) {
+                    return lhs.turnSeverity > rhs.turnSeverity;
+                }
+                return lhs.index < rhs.index;
+            });
+
+            const size_t selectedCount = std::min(
+                candidates.size(), static_cast<size_t>(maxSliceCount));
+            std::vector<size_t> selectedIndices;
+            selectedIndices.reserve(selectedCount + 2);
+            selectedIndices.push_back(0);
+            for (size_t i = 0; i < selectedCount; ++i) {
+                selectedIndices.push_back(candidates[i].index);
+            }
+            selectedIndices.push_back(refSparse.size() - 1);
+            std::sort(selectedIndices.begin(), selectedIndices.end());
+
+            std::vector<LinePoint> limitedRef;
+            limitedRef.reserve(selectedIndices.size());
+            for (const size_t index : selectedIndices) {
+                limitedRef.push_back(refSparse[index]);
+            }
+            refSparse.swap(limitedRef);
+        }
 
         // ============================
         // 3) Fetch three dense lines and align their direction
@@ -970,68 +1373,7 @@ namespace ModelTrajPlan
         return !slicingnode.empty();
     }
 
-    //conver data to draw
-    bool BoundaryDetector::convertLinePointsToMeshData(
-        const Epiphyseal& boundary,
-        MeshData& colorline_data_element,
-        float r, float g, float b, float a)
-    {
-        if (boundary.empty()) {
-            return false;
-        }
-
-        colorline_data_element.m_vertices.clear();
-        colorline_data_element.m_normals.clear();
-        colorline_data_element.m_colors.clear();
-        colorline_data_element.m_indices.clear();
-
-        // Calculate total number of vertices
-        size_t totalVertexCount = 0;
-        for (const auto& path : boundary) {
-            totalVertexCount += path.size();
-        }
-
-        colorline_data_element.m_vertices.reserve(totalVertexCount * 7);
-        colorline_data_element.m_indices.reserve(totalVertexCount * 2);
-
-        unsigned int globalVertexOffset = 0;
-
-        // Iterate through each independent path
-        for (const auto& path : boundary) {
-            if (path.empty()) continue;
-
-            // Add all vertices of current path
-            for (const auto& lp : path) {
-                const auto& p = lp.position;
-                colorline_data_element.m_vertices.push_back(static_cast<float>(p.x()));
-                colorline_data_element.m_vertices.push_back(static_cast<float>(p.y()));
-                colorline_data_element.m_vertices.push_back(static_cast<float>(p.z()));
-
-                colorline_data_element.m_vertices.push_back(r);
-                colorline_data_element.m_vertices.push_back(g);
-                colorline_data_element.m_vertices.push_back(b);
-                colorline_data_element.m_vertices.push_back(a);
-            }
-
-            // Add indices for current path (connect points within the path)
-            for (size_t i = 0; i < path.size() - 1; ++i) {
-                colorline_data_element.m_indices.push_back(globalVertexOffset + static_cast<unsigned int>(i));
-                colorline_data_element.m_indices.push_back(globalVertexOffset + static_cast<unsigned int>(i) + 1);
-            }
-
-            // Update global vertex offset
-            globalVertexOffset += static_cast<unsigned int>(path.size());
-        }
-
-        return true;
-    }
-    BoundaryDetector::~BoundaryDetector()
-    {
-        // 
-    }
-
-
-    // Newell method for polygon normal
+    // Newell method for the original boundary-loop normal calculation.
     static Eigen::Vector3d computePolygonNormal(const std::vector<Eigen::Vector3d>& pts)
     {
         Eigen::Vector3d n(0, 0, 0);
@@ -1045,15 +1387,15 @@ namespace ModelTrajPlan
             n.y() += (p0.z() - p1.z()) * (p0.x() + p1.x());
             n.z() += (p0.x() - p1.x()) * (p0.y() + p1.y());
         }
-        double len = n.norm();
+        const double len = n.norm();
         if (len < 1e-8) {
             return Eigen::Vector3d(0, 0, 1);
         }
         return n / len;
     }
 
-
-    bool BoundaryDetector::detectBoundaries(const ModelData& modelData, BoundaryData& boundaryData, Epiphyseal& intersectionPoints, MeshData& intersectionPointsData)
+    // Original algorithm entry, with its old rendering-data output removed.
+    bool BoundaryDetector::detectBoundaries(const ModelData& modelData, BoundaryData& boundaryData, Epiphyseal& intersectionPoints)
     {
         // [ALGORITHM] Detect boundaries from STL model
         // Input: modelData - STL model data
@@ -1064,9 +1406,8 @@ namespace ModelTrajPlan
         }
 
         try {
-            // Match Python's extract_boundary_loops +
-            // classify_top_bottom_boundaries: trace every complete free-edge
-            // loop first, then select top/bottom by the whole-loop centroid.
+            // Trace complete free-edge loops first. End labels and reference
+            // plane selection use rim geometry, never a world-Z partition.
             const auto edgeCount = getEdgeCountMap(modelData);
             std::map<Eigen::Vector3d, std::vector<Eigen::Vector3d>, Vector3dLexicographicalCompare> adjacency;
             std::set<std::pair<Eigen::Vector3d, Eigen::Vector3d>, PairOfVector3dCompare> unvisitedEdges;
@@ -1120,10 +1461,16 @@ namespace ModelTrajPlan
                     for (const auto& point : loop) center += point;
                     return center / static_cast<double>(loop.size());
                 };
-                std::sort(boundaryLoops.begin(), boundaryLoops.end(),
-                    [&](const auto& lhs, const auto& rhs) {
-                        return loopCenter(lhs).z() < loopCenter(rhs).z();
-                    });
+                const auto perimeter = [](const std::vector<Eigen::Vector3d>& loop) {
+                    double length = 0.0;
+                    for(size_t i = 0; i < loop.size(); ++i)
+                        length += (loop[(i + 1) % loop.size()] - loop[i]).norm();
+                    return length;
+                };
+                // Large/small ends are geometric labels, independent of Z.
+                // Equal-size ends retain their traced order.
+                std::stable_sort(boundaryLoops.begin(), boundaryLoops.end(),
+                    [&](const auto& lhs, const auto& rhs) { return perimeter(lhs) > perimeter(rhs); });
 
                 const auto fillBoundary = [&](const std::vector<Eigen::Vector3d>& loop,
                     BoundaryLine& boundary, const Eigen::Vector3f& color,
@@ -1143,6 +1490,11 @@ namespace ModelTrajPlan
                     boundary.color = color;
                     boundary.name = name;
                     boundary.Type = type;
+                    Eigen::Vector3d circleCenter;
+                    if(fitBoundaryCircle(boundary, circleCenter)) {
+                        boundary.center = circleCenter;
+                        boundary.z_level = circleCenter.z();
+                    }
                 };
 
                 fillBoundary(boundaryLoops.front(), boundaryData.lowerBoundary_,
@@ -1157,16 +1509,17 @@ namespace ModelTrajPlan
             {
                 // Clear previous intersection/slicing artifacts before rebuilding.
                 intersectionPoints.clear();
+                boundaryData.projectedContourLines_.clear();
                 boundaryData.phaseReferenceLine_.clear();
                 boundaryData.phaseReferencePlaneNormal_.setZero();
+                boundaryData.referenceLines_.clear();
                 boundaryData.LinePoints_.clear();
                 boundaryData.Mainslicingnode.clear();
-                intersectionPointsData.m_vertices.clear();
-                intersectionPointsData.m_normals.clear();
-                intersectionPointsData.m_colors.clear();
-                intersectionPointsData.m_indices.clear();
 
-                bool sliceSuccess = calculatePlaneIntersection(
+                // The legacy intersection pass is retained solely to fit the
+                // mirror-plane normal.  Its traced curves are neither drawn
+                // nor used as slicing references.
+                calculatePlaneIntersection(
                     modelData,
                     boundaryData.upperBoundary_,
                     boundaryData.lowerBoundary_,
@@ -1174,50 +1527,62 @@ namespace ModelTrajPlan
                     &boundaryData.phaseReferencePlaneNormal_
                 );
 
-                if (sliceSuccess) {
-                    // calculatePlaneIntersection keeps the two raw outer
-                    // curves at indices 0 and 1, then appends a synthesized
-                    // center line at index 2. Persist the shorter raw curve
-                    // as the one global phase reference used by all slices.
-                    const size_t candidateCount = std::min<size_t>(2, intersectionPoints.size());
+                // Projection only needs the fitted plane. Tracing a mesh-plane
+                // intersection can fail on coplanar edges; that must not suppress
+                // the independently computed projected envelope.
+                const bool projectedContourSuccess = appendProjectedOuterContour(
+                    modelData, boundaryData.lowerBoundary_.center,
+                    boundaryData.phaseReferencePlaneNormal_, boundaryData.lowerBoundary_,
+                    boundaryData.upperBoundary_, boundaryData.projectedContourLines_,
+                    boundaryData.referenceLines_);
+
+                if (projectedContourSuccess && boundaryData.projectedContourLines_.size() == 3) {
+                    // All three curves must share lower-to-upper orientation so
+                    // their indices remain paired when building cutting planes.
+                    const auto& centerLine = boundaryData.projectedContourLines_[2];
+                    if (centerLine.size() >= 2 &&
+                        (centerLine.front().position - boundaryData.lowerBoundary_.center).norm() >
+                        (centerLine.back().position - boundaryData.lowerBoundary_.center).norm()) {
+                        for (auto& line : boundaryData.projectedContourLines_) {
+                            std::reverse(line.begin(), line.end());
+                        }
+                    }
+                    computeLineAttributes(boundaryData.projectedContourLines_);
+
+                    // The projected center drives slice placement only. For
+                    // trajectory phase select the shorter *raw* direct
+                    // mesh/mirror-plane intersection. It is the user's
+                    // cutting line, so sample 0 on every contour lies there.
+                    const size_t directLineCount = std::min<size_t>(2, intersectionPoints.size());
                     double shortestLength = std::numeric_limits<double>::infinity();
                     size_t shortestIndex = 0;
-                    for (size_t lineIndex = 0; lineIndex < candidateCount; ++lineIndex) {
+                    for (size_t lineIndex = 0; lineIndex < directLineCount; ++lineIndex) {
                         const auto& line = intersectionPoints[lineIndex];
+                        if (line.size() < 2) continue;
                         double length = 0.0;
                         for (size_t pointIndex = 1; pointIndex < line.size(); ++pointIndex) {
                             length += (line[pointIndex].position - line[pointIndex - 1].position).norm();
                         }
-                        if (line.size() >= 2 && length < shortestLength) {
+                        if (length < shortestLength) {
                             shortestLength = length;
                             shortestIndex = lineIndex;
                         }
                     }
-                    if (std::isfinite(shortestLength)) {
-                        boundaryData.phaseReferenceLine_ = intersectionPoints[shortestIndex];
+                    boundaryData.phaseReferenceLine_ = std::isfinite(shortestLength)
+                        ? intersectionPoints[shortestIndex]
+                        : boundaryData.projectedContourLines_[2];
 
-                        // Give the reference a stable lower-to-upper direction
-                        // so normal x reference-tangent selects the same contour
-                        // winding on every layer.
-                        const auto& reference = boundaryData.phaseReferenceLine_;
-                        if (reference.size() >= 2 &&
-                            (reference.front().position - boundaryData.lowerBoundary_.center).norm() >
-                            (reference.back().position - boundaryData.lowerBoundary_.center).norm()) {
-                            std::reverse(boundaryData.phaseReferenceLine_.begin(),
-                                boundaryData.phaseReferenceLine_.end());
-                        }
-                    }
-                    convertLinePointsToMeshData(intersectionPoints, intersectionPointsData);
-                    // Build adaptive slicing nodes for UniformSlicer::buildSlicePlanes
+                    // Use the projected contour center line for corner-first,
+                    // curvature-second cutting-plane placement.
                     const bool adaptiveOk =
                         generateAdaptiveNodes(
-                            intersectionPoints,
+                            boundaryData.projectedContourLines_,
                             boundaryData.LinePoints_,
                             boundaryData.epsilon_,
                             boundaryData.minStep_);
                     const bool slicingNodeOk =
                         buildSlicingNodes(
-                            intersectionPoints,
+                            boundaryData.projectedContourLines_,
                             boundaryData.LinePoints_,
                             boundaryData.Mainslicingnode,
                             boundaryData.minStep_);
@@ -1426,201 +1791,6 @@ namespace ModelTrajPlan
         return offsetBoundary;
     }
 
-    bool BoundaryDetector::initializeRenderer(BoundaryRenderData& renderData)
-    {
-        // Models are created externally (by scene or manager)
-        renderData.needsUpdate = true;
-
-        return (renderData.upperBoundary != nullptr);
-    }
-
-    bool BoundaryDetector::draw(BoundaryRenderData& renderData, const BoundaryData& data)
-    {
-        if (!renderData.upperBoundary || !renderData.isVisible) {
-            return false;
-        }
-
-        if (renderData.needsUpdate) {
-            updateRenderData(renderData, data);
-            renderData.needsUpdate = false;
-        }
-
-        // ===== Upper Boundary (Red) =====
-        if (renderData.upperBoundary && !data.upperBoundary_.points.empty()) {
-            material_attr mat(material_attr::MaterialRed);
-            mat.emission = glm::vec4(
-                renderData.upperColor.x(),
-                renderData.upperColor.y(),
-                renderData.upperColor.z(), 1.0f
-            );
-
-            renderData.upperBoundary->set_local_material(mat);
-            renderData.upperBoundary->use_material(MATERIAL_TYPE::LOCAL);
-            renderData.upperBoundary->draw();
-        }
-
-        // ===== Lower Boundary (Blue) =====
-        if (renderData.lowerBoundary && !data.lowerBoundary_.points.empty()) {
-            material_attr mat(material_attr::MaterialBlue);
-            mat.emission = glm::vec4(
-                renderData.lowerColor.x(),
-                renderData.lowerColor.y(),
-                renderData.lowerColor.z(), 1.0f
-            );
-
-            renderData.lowerBoundary->set_local_material(mat);
-            renderData.lowerBoundary->use_material(MATERIAL_TYPE::LOCAL);
-            renderData.lowerBoundary->draw();
-        }
-
-        // ===== Intersection Points (Green) =====
-        if (renderData.intersectionPoints && !data.intersectionPoints_.empty()) {
-            renderData.intersectionPoints->import(renderData.intersectionPointsData_);
-            renderData.intersectionPoints->use_material(MATERIAL_TYPE::LOCAL);
-            renderData.intersectionPoints->draw();
-        }
-
-        return true;
-    }
-
-
-    void BoundaryDetector::drawOffsetBoundaries(BoundaryRenderData& renderData, const BoundaryData& boundaryData)
-    {
-        if (!renderData.upperBoundaryOffset || !renderData.isOffsetVisible) {
-            return;
-        }
-
-        if (renderData.needsUpdate) {
-            updateRenderData(renderData, boundaryData);
-        }
-
-        // Draw upper boundary offset (yellow)
-        if (renderData.upperBoundaryOffset && !boundaryData.upperBoundaryOffset_.points.empty()) {
-            material_attr yellowMaterial(material_attr::MaterialGreen);
-            yellowMaterial.emission = glm::vec4(
-                renderData.offsetColor.x(),
-                renderData.offsetColor.y(),
-                renderData.offsetColor.z(), 1.0f
-            );
-            yellowMaterial.ambient = glm::vec4(1.0f, 1.0f, 0.0f, 1.0f);
-            yellowMaterial.diffuse = glm::vec4(1.0f, 1.0f, 0.0f, 1.0f);
-            renderData.upperBoundaryOffset->set_local_material(yellowMaterial);
-            renderData.upperBoundaryOffset->use_material(MATERIAL_TYPE::LOCAL);
-            renderData.upperBoundaryOffset->draw();
-        }
-
-        // Draw lower boundary offset (yellow)
-        if (renderData.lowerBoundaryOffset && !boundaryData.lowerBoundaryOffset_.points.empty()) {
-            material_attr yellowMaterial(material_attr::MaterialGreen);
-            yellowMaterial.emission = glm::vec4(
-                renderData.offsetColor.x(),
-                renderData.offsetColor.y(),
-                renderData.offsetColor.z(), 1.0f
-            );
-            yellowMaterial.ambient = glm::vec4(1.0f, 1.0f, 0.0f, 1.0f);
-            yellowMaterial.diffuse = glm::vec4(1.0f, 1.0f, 0.0f, 1.0f);
-            renderData.lowerBoundaryOffset->set_local_material(yellowMaterial);
-            renderData.lowerBoundaryOffset->use_material(MATERIAL_TYPE::LOCAL);
-            renderData.lowerBoundaryOffset->draw();
-        }
-    }
-
-    void BoundaryDetector::setUpperBoundaryColor(BoundaryRenderData& renderData, const Eigen::Vector3f& color)
-    {
-        renderData.upperColor = color;
-        renderData.needsUpdate = true;
-    }
-
-    void BoundaryDetector::setLowerBoundaryColor(BoundaryRenderData& renderData, const Eigen::Vector3f& color)
-    {
-        renderData.lowerColor = color;
-        renderData.needsUpdate = true;
-    }
-
-    void BoundaryDetector::setBoundaryLineWidth(BoundaryRenderData& renderData, float width)
-    {
-        renderData.lineWidth = width;
-        renderData.needsUpdate = true;
-    }
-
-    void BoundaryDetector::setBoundaryVisibility(BoundaryRenderData& renderData, bool visible)
-    {
-        renderData.isVisible = visible;
-        renderData.needsUpdate = true;
-    }
-
-    void BoundaryDetector::setOffsetBoundaryVisibility(BoundaryRenderData& renderData, bool visible)
-    {
-        renderData.isOffsetVisible = visible;
-        renderData.needsUpdate = true;
-    }
-
-    void BoundaryDetector::updateRenderData(BoundaryRenderData& renderData, const BoundaryData& data)
-    {
-        // ===== Main boundaries =====
-        convertBoundaryToModelData(data.upperBoundary_, renderData.upperBoundaryData);
-        convertBoundaryToModelData(data.lowerBoundary_, renderData.lowerBoundaryData);
-
-        if (renderData.upperBoundary && !renderData.upperBoundaryData.m_vertices.empty()) {
-            renderData.upperBoundary->import(renderData.upperBoundaryData);
-        }
-
-        if (renderData.lowerBoundary && !renderData.lowerBoundaryData.m_vertices.empty()) {
-            renderData.lowerBoundary->import(renderData.lowerBoundaryData);
-        }
-
-        // ===== Offset boundaries =====
-        if (!data.upperBoundaryOffset_.points.empty() || !data.lowerBoundaryOffset_.points.empty()) {
-
-            convertBoundaryToModelData(data.upperBoundaryOffset_, renderData.upperOffsetData);
-            convertBoundaryToModelData(data.lowerBoundaryOffset_, renderData.lowerOffsetData);
-
-            if (renderData.upperBoundaryOffset && !renderData.upperOffsetData.m_vertices.empty()) {
-                renderData.upperBoundaryOffset->import(renderData.upperOffsetData);
-            }
-
-            if (renderData.lowerBoundaryOffset && !renderData.lowerOffsetData.m_vertices.empty()) {
-                renderData.lowerBoundaryOffset->import(renderData.lowerOffsetData);
-            }
-        }
-    }
-
-    // Convert boundary polyline to MeshData line segments for import()
-    void BoundaryDetector::convertBoundaryToModelData(const BoundaryLine& boundary, MeshData& line_data)
-    {
-        if (boundary.points.empty()) {
-            return;
-        }
-
-        // Closed loop: MONOLINE_ARRAY style (vertex pairs per segment)
-        const size_t n = boundary.points.size();
-        line_data.m_vertices.clear();
-        line_data.m_vertices.reserve(n * 2 * 3);
-
-        for (size_t i = 0; i < n; ++i) {
-            const auto& p1 = boundary.points[i].position;
-            const auto& p2 = boundary.points[(i + 1) % n].position; // wrap for closed loop
-            line_data.m_vertices.push_back(static_cast<float>(p1.x()));
-            line_data.m_vertices.push_back(static_cast<float>(p1.y()));
-            line_data.m_vertices.push_back(static_cast<float>(p1.z()));
-
-            line_data.m_vertices.push_back(static_cast<float>(p2.x()));
-            line_data.m_vertices.push_back(static_cast<float>(p2.y()));
-            line_data.m_vertices.push_back(static_cast<float>(p2.z()));
-        }
-    }
-
-    bool BoundaryDetector::hasRenderableData(const BoundaryData& boundaryData)
-    {
-        // [QUERY] Check if boundary data has renderable content
-        // Input: boundaryData - boundary data to check
-        // Output: bool - true if has renderable data
-        return (!boundaryData.upperBoundary_.points.empty() || !boundaryData.lowerBoundary_.points.empty());
-    }
-
-
-
-
     void BoundaryDetector::clear(BoundaryData& boundaryData)
     {
         // [ALGORITHM] Clear boundary data
@@ -1660,8 +1830,10 @@ namespace ModelTrajPlan
         boundaryData.z_min_boundary_ = 0.0;
         boundaryData.boundaryLines_.clear();
         boundaryData.intersectionPoints_.clear();
+        boundaryData.projectedContourLines_.clear();
         boundaryData.phaseReferenceLine_.clear();
         boundaryData.phaseReferencePlaneNormal_.setZero();
+        boundaryData.referenceLines_.clear();
         boundaryData.LinePoints_.clear();
         boundaryData.Mainslicingnode.clear();
 

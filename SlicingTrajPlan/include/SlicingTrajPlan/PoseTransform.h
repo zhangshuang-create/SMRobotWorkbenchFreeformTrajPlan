@@ -1,25 +1,16 @@
 #pragma once
 
-#include "PoseTransform_global.h"
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
-#include <ModelTangQing/imodel.h>
-#include <GeneralData/GeneralData.h>
-#include <RenderData/RenderData.h>
-#include <CameraTangQing/icamera.h>
-#include <ModelTangQing/iscene.h>
-#include <ModelTangQing/icollision_detector.h>
-#include <SMRobotTangQing/robot_factory.h>
 #include <vector>
 #include <string>
 #include <array>
 #include <memory>
-#include <map>
 
-// Assimp headers for STL loading
-#include <assimp/Importer.hpp>
-#include <assimp/scene.h>
-#include <assimp/postprocess.h>
+namespace Assimp
+{
+    class Importer;
+}
 namespace ModelTrajPlan
 {
     // ------------------------------------------------------------
@@ -68,7 +59,9 @@ namespace ModelTrajPlan
     // ------------------------------------------------------------
     // Pose transform module class
     // ------------------------------------------------------------
-    class PoseTransform_SHAREDLIB PoseTransform
+    // Pure mesh-registration and pose-transformation algorithm.
+    // Rendering, scene, robot and UI ownership remain outside this module.
+    class PoseTransform
     {
     public:
         PoseTransform();

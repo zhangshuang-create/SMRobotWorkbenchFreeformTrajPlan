@@ -1,16 +1,16 @@
-#include <TrajectoryGenerator/TrajectoryGenerator.h>
-#include <GeneralData/GeneralData.h>                // Add TrajVector3D definition
-#include <TrajectoryFrame/TrajectoryFrame.h>        // For trajectory rendering
+#include <SlicingTrajPlan/TrajectoryGenerator.h>
+#include <SlicingTrajPlan/GeneralData.h>
+#include <SlicingTrajPlan/TrajectoryFrame.h>
 #include <iostream>
 #include <fstream>
 #include <sstream>
 #include <iomanip>
 #include <algorithm>
 #include <cmath>
-#include <BoundaryDetector/BoundaryDetector.h>  // For boundary data access
-#include <STLProcessor/STLProcessor.h>           // For ModelData
-#include <UniformSlicer/UniformSlicer.h>        // For SliceResult
-#include <qDebug>
+#include <map>
+#include <SlicingTrajPlan/BoundaryDetector.h>
+#include <SlicingTrajPlan/STLProcessor.h>
+#include <SlicingTrajPlan/UniformSlicer.h>
 
 // If M_PI is not defined, use the standard value
 #ifndef M_PI
@@ -51,15 +51,6 @@ namespace ModelTrajPlan
         if (polygonNormal.norm() > 1e-10 && polygonNormal.dot(boundary.normal) < 0.0) {
             std::reverse(boundary.points.begin(), boundary.points.end());
         }
-    }
-
-
-    bool TrajectoryGenerator::initializeRenderer(TrajectoryRenderData& renderData)
-    {
-        // No longer depends on scene (managed externally now)
-        renderData.needsUpdate = true;
-
-        return true;
     }
 
 
@@ -113,8 +104,7 @@ namespace ModelTrajPlan
         TrajectoryGroupInfo& groupInfo,
         BoundaryData& boundaryData,
         SlicingData& slicingData,
-        TrajData& trajData,
-        PublicData::TrajData& PublictrajData
+        TrajData& trajData
     )
     {
         try {
@@ -159,13 +149,19 @@ namespace ModelTrajPlan
             // Sync to output parameter (keep interface compatibility)
             trajectoryPoints = trajData.trajectoryPoints_;
 
-            // 3. Output trajectory group info (computed from trajectory points)
-            groupInfo.numTrajectories = sliceResult.usedParams.numTrajectories;
+            // 3. Output trajectory group info from the actual sampled columns.
+            // A requested count of zero means "derive it from spacing", so it
+            // must never be used as a divisor after sampling.
+            groupInfo.numTrajectories = static_cast<int>(trajData.sampledBoundaryPoints_.size());
+            if(groupInfo.numTrajectories <= 0) {
+                trajectoryPoints.clear();
+                trajData.trajectoryPoints_.clear();
+                return false;
+            }
             groupInfo.pointsPerTrajectory = !trajData.trajectoryPoints_.empty() ?
                 static_cast<int>(trajData.trajectoryPoints_.size() / groupInfo.numTrajectories) : 0;
             groupInfo.isConsistent = true;
 
-            convertToPublicTrajectoryWithTime(trajData.trajectoryPoints_, PublictrajData.getTrajectoryPoints());
             return true;
         }
         catch (const std::exception& e) {
@@ -173,76 +169,6 @@ namespace ModelTrajPlan
             return false;
         }
     }
-
-
-    bool TrajectoryGenerator::convertToPublicTrajectoryWithTime(
-        const std::vector<TrajectoryPoint>& input,
-        PublicData::TrajectoryPoints& output
-    )
-    {
-        // Clear output container to avoid data accumulation
-        output.clear();
-
-        // Return false if input is empty
-        if (input.empty())
-            return false;
-
-        double current_time = 0.0;
-
-        for (size_t i = 0; i < input.size(); ++i)
-        {
-            const auto& src = input[i];
-
-            // =========================
-            // 1. Construct output point
-            // =========================
-            PublicData::TrajectoryPoint dst;
-            dst.pose = src.pose;
-            dst.spray_distance = src.spray_distance;
-            dst.velocity = src.velocity;
-            // Preserve scan-pass ownership for downstream interpolation.
-            dst.spray_pass_id = src.trajectory_index;
-
-            // =========================
-            // 2. Time computation
-            // =========================
-            if (i > 0)
-            {
-                const auto& prev = input[i - 1];
-
-                // Extract positions from transformation matrices
-                Eigen::Vector3d p1 = prev.pose.block<3, 1>(0, 3);
-                Eigen::Vector3d p2 = src.pose.block<3, 1>(0, 3);
-
-                // Compute Euclidean distance
-                double dist = (p2 - p1).norm();
-
-                if (dist > 1e-6)
-                {
-                    // Use average velocity for smoother timing
-                    double v = std::max((src.velocity + prev.velocity) * 0.5, 1e-6);
-
-                    // Time increment: dt = distance / velocity
-                    double dt = dist / v;
-
-                    current_time += dt;
-                }
-                else
-                {
-                    // Avoid duplicate timestamps when distance is too small
-                    current_time += 1e-6;
-                }
-            }
-
-            // =========================
-            // 3. Insert into map (timestamp as key)
-            // =========================
-            output[current_time] = dst;
-        }
-
-        return true;
-    }
-
 
 
     // [Refactor Addition] Generate reference lines from slicing result - new interface auto-copies boundaries based on offset params
@@ -257,6 +183,7 @@ namespace ModelTrajPlan
     {
 
         try {
+            const bool boundarylessFallback = sliceResult.isBoundarylessFallback;
             // [Addition] Place sliceLines_ into boundaryLines_ in order
             // The boundary offsets are empty-run extensions, not independent
             // Z-shifted contours.  Sample the physical contours first, then
@@ -270,7 +197,7 @@ namespace ModelTrajPlan
             boundaryData.upperBoundaryOffset_.points.clear();
 
             // 1. Add lower boundary
-            if (!lowerBoundary.points.empty()) {
+            if (!boundarylessFallback && !lowerBoundary.points.empty()) {
                 boundaryData.boundaryLines_.push_back(lowerBoundary);
             }
 
@@ -285,7 +212,7 @@ namespace ModelTrajPlan
             if (!slicingData.sliceLines_.empty()) {
                 std::vector<BoundaryLine> orderedSliceLines = slicingData.sliceLines_;
 
-                if (sliceResult.usedParams.mode == SlicingMode::Parallel) {
+                if (sliceResult.usedParams.mode == SlicingMode::Parallel || boundarylessFallback) {
                     // Parallel planes all share the global Z direction, so Z
                     // is a valid bottom-to-top ordering key.
                     std::sort(orderedSliceLines.begin(), orderedSliceLines.end(),
@@ -325,7 +252,7 @@ namespace ModelTrajPlan
             }
 
             // 3. Add upper boundary
-            if (!upperBoundary.points.empty()) {
+            if (!boundarylessFallback && !upperBoundary.points.empty()) {
                 boundaryData.boundaryLines_.push_back(upperBoundary);
             }
 
@@ -357,15 +284,23 @@ namespace ModelTrajPlan
                 std::cout << "TrajectoryGenerator: Error - no valid contour polylines" << std::endl;
                 return false;
             }
-            const int longestCount = std::max(1, static_cast<int>(std::floor(longestLength / spacing)));
-            const int shortestCount = std::max(1, static_cast<int>(std::floor(shortestLength / spacing)));
-            const int trajectoryCount = std::max(2, (longestCount + shortestCount) / 2);
+            int trajectoryCount = sliceResult.usedParams.numTrajectories;
+            if (trajectoryCount <= 0) {
+                const int longestCount = std::max(1, static_cast<int>(std::floor(longestLength / spacing)));
+                const int shortestCount = std::max(1, static_cast<int>(std::floor(shortestLength / spacing)));
+                trajectoryCount = std::max(2, (longestCount + shortestCount) / 2);
+            }
+            trajectoryCount = std::max(2, trajectoryCount);
+            if (trajectoryCount % 2 != 0) {
+                ++trajectoryCount;
+            }
 
 
             // 5. Uniformly sample the physical contours first.
             trajData.sampledBoundaryPoints_ =
                 samplePointsFromBoundaryLines(boundaryData.boundaryLines_, trajectoryCount,
-                    boundaryData.phaseReferenceLine_, boundaryData.phaseReferencePlaneNormal_);
+                    boundarylessFallback ? std::vector<LinePoint>{} : boundaryData.phaseReferenceLine_,
+                    boundarylessFallback ? Eigen::Vector3d::Zero() : boundaryData.phaseReferencePlaneNormal_);
 
             if (trajData.sampledBoundaryPoints_.empty()) {
                 return false;
@@ -402,10 +337,18 @@ namespace ModelTrajPlan
             lowerOffsetPoints.reserve(trajData.sampledBoundaryPoints_.size());
             upperOffsetPoints.reserve(trajData.sampledBoundaryPoints_.size());
 
+            // UI semantics: z1 is the large/lower-end offset, z2 is the
+            // small/upper-end offset.  Each is a translation away from the
+            // adjacent physical slice toward its own boundary.
+            const bool requiresEmptyRun = trajParams.z1Offset != 0.0 || trajParams.z2Offset != 0.0;
+            const size_t minimumLayersForOffset = boundarylessFallback ? 2 : 3;
             for (auto& trajectory : trajData.sampledBoundaryPoints_) {
-                if (trajectory.size() < 3) {
-                    qWarning() << "Boundary empty-run requires a lower boundary, an adjacent slice, and an upper boundary.";
+                if (requiresEmptyRun && trajectory.size() < minimumLayersForOffset) {
+                    std::cerr << "Boundary empty-run requires a lower boundary, an adjacent slice, and an upper boundary." << std::endl;
                     return false;
+                }
+                if (!requiresEmptyRun) {
+                    continue;
                 }
 
                 const Eigen::Vector3d& lowerBoundaryPoint = trajectory.front();
@@ -416,31 +359,35 @@ namespace ModelTrajPlan
                 Eigen::Vector3d lowerDirection = lowerBoundaryPoint - lowerAdjacentSlicePoint;
                 Eigen::Vector3d upperDirection = upperBoundaryPoint - upperAdjacentSlicePoint;
                 if (lowerDirection.norm() <= 1e-8 || upperDirection.norm() <= 1e-8) {
-                    qWarning() << "Cannot derive empty-run direction from coincident boundary and slice points.";
+                    std::cerr << "Cannot derive empty-run direction from coincident boundary and slice points." << std::endl;
                     return false;
                 }
 
                 lowerOffsetPoints.push_back(lowerBoundaryPoint +
-                    lowerDirection.normalized() * trajParams.z2Offset);
+                    lowerDirection.normalized() * trajParams.z1Offset);
                 upperOffsetPoints.push_back(upperBoundaryPoint +
-                    upperDirection.normalized() * trajParams.z1Offset);
+                    upperDirection.normalized() * trajParams.z2Offset);
             }
 
-            if (trajParams.z2Offset != 0.0) {
-                boundaryData.lowerBoundaryOffset_ = buildOffsetBoundary(
-                    lowerOffsetPoints, lowerBoundary, BoundaryLineType::LowerBoundaryOffset);
-                boundaryData.boundaryLines_.insert(boundaryData.boundaryLines_.begin(),
-                    boundaryData.lowerBoundaryOffset_);
+            if (trajParams.z1Offset != 0.0) {
+                if (!boundarylessFallback) {
+                    boundaryData.lowerBoundaryOffset_ = buildOffsetBoundary(
+                        lowerOffsetPoints, lowerBoundary, BoundaryLineType::LowerBoundaryOffset);
+                    boundaryData.boundaryLines_.insert(boundaryData.boundaryLines_.begin(),
+                        boundaryData.lowerBoundaryOffset_);
+                }
                 for (size_t index = 0; index < trajData.sampledBoundaryPoints_.size(); ++index) {
                     trajData.sampledBoundaryPoints_[index].insert(
                         trajData.sampledBoundaryPoints_[index].begin(), lowerOffsetPoints[index]);
                 }
             }
 
-            if (trajParams.z1Offset != 0.0) {
-                boundaryData.upperBoundaryOffset_ = buildOffsetBoundary(
-                    upperOffsetPoints, upperBoundary, BoundaryLineType::UpperBoundaryOffset);
-                boundaryData.boundaryLines_.push_back(boundaryData.upperBoundaryOffset_);
+            if (trajParams.z2Offset != 0.0) {
+                if (!boundarylessFallback) {
+                    boundaryData.upperBoundaryOffset_ = buildOffsetBoundary(
+                        upperOffsetPoints, upperBoundary, BoundaryLineType::UpperBoundaryOffset);
+                    boundaryData.boundaryLines_.push_back(boundaryData.upperBoundaryOffset_);
+                }
                 for (size_t index = 0; index < trajData.sampledBoundaryPoints_.size(); ++index) {
                     trajData.sampledBoundaryPoints_[index].push_back(upperOffsetPoints[index]);
                 }
@@ -470,9 +417,10 @@ namespace ModelTrajPlan
             return false;
         }
         if (!modelData || STLProcessor::getTriangleCount(modelData->mainModelData_) == 0) {
-            qWarning() << "Trajectory generation requires valid STL triangles to calculate surface normals.";
+            std::cerr << "Trajectory generation requires valid STL triangles to calculate surface normals." << std::endl;
             return false;
         }
+        if (!validTrajectoryAxes(trajParams.normalAxis, trajParams.forwardAxis)) return false;
 
         // A slice center is a good sign reference for side walls, but it is
         // nearly tangent to the normal on caps (and can be ambiguous at
@@ -582,6 +530,7 @@ namespace ModelTrajPlan
             }
 
             const std::vector<Eigen::Vector3d>& layerPoints = sampledPoints[trajectoryIndex];
+            if (trajParams.previewFirstPoint && trajectoryIndex > 0) break;
 
             // [Key] Determine whether to reverse: odd indices (1st, 3rd, 5th...) run top to bottom
             bool reverseDirection = (trajectoryIndex % 2 == 1);
@@ -594,13 +543,27 @@ namespace ModelTrajPlan
             Eigen::Vector3d previousNormal = Eigen::Vector3d::Zero();
 
             for (size_t i = 0; i < layerPoints.size(); ++i) {
+                // A first offset point also needs the physical boundary pose.
+                if (trajParams.previewFirstPoint && i > (trajParams.z1Offset != 0.0 ? 1u : 0u)) break;
                 // [Serpentine] Select point index based on direction
                 size_t pointIndex = reverseDirection ? (layerPoints.size() - 1 - i) : i;
                 const auto& point = layerPoints[pointIndex];
 
+                // Empty-run layers are pure translations of their physical
+                // boundary. Keep that boundary's orientation; only their
+                // position changes along the boundary-to-adjacent-slice line.
+                size_t poseSourceIndex = pointIndex;
+                if (layerPoints.size() >= 3) {
+                    if (pointIndex == 0 && trajParams.z1Offset != 0.0) {
+                        poseSourceIndex = 1;
+                    } else if (pointIndex + 1 == layerPoints.size() && trajParams.z2Offset != 0.0) {
+                        poseSourceIndex = layerPoints.size() - 2;
+                    }
+                }
+
                 // 1. Start with the independently oriented normal.  A layer
                 // consensus is applied after path continuity below.
-                Eigen::Vector3d surfaceNormal = baseNormals[trajectoryIndex][pointIndex];
+                Eigen::Vector3d surfaceNormal = baseNormals[trajectoryIndex][poseSourceIndex];
 
                 // Enforce local continuity after the absolute side has been
                 // selected.  Use the traversal order (including serpentine
@@ -616,61 +579,38 @@ namespace ModelTrajPlan
                 // radial sign of all trajectories in this same layer.  Weak
                 // cap references are intentionally left to local continuity.
                 const Eigen::Vector3d& layerReference =
-                    layerReferences[trajectoryIndex][pointIndex];
-                if (pointIndex < layerTrendSigns.size() &&
-                    layerTrendSigns[pointIndex] != 0 &&
+                    layerReferences[trajectoryIndex][poseSourceIndex];
+                if (poseSourceIndex < layerTrendSigns.size() &&
+                    layerTrendSigns[poseSourceIndex] != 0 &&
                     layerReference.squaredNorm() > 1e-12) {
                     const double fittedDot = surfaceNormal.dot(layerReference);
                     if (std::abs(fittedDot) >= referenceStrength &&
-                        fittedDot * layerTrendSigns[pointIndex] < 0.0) {
+                        fittedDot * layerTrendSigns[poseSourceIndex] < 0.0) {
                         surfaceNormal = -surfaceNormal;
                     }
                 }
                 previousNormal = surfaceNormal;
 
-                // 2. Compute trajectory direction (Y-axis)
-                // Determine consistently by layer index, independent of traversal order
-                Eigen::Vector3d yAxis(0, 1, 0); // Default upward
-                size_t layerIndex = pointIndex; // Layer index
-
-                if (layerIndex == 0) {
-                    // Layer 0
-                    if (layerPoints.size() > 1) {
-                        Eigen::Vector3d dir = layerPoints[1] - point;
-                        if (dir.norm() > 1e-8) yAxis = dir.normalized();
-                    }
+                // 2. X uses the fixed lower-to-upper layer direction. The
+                // return stroke traverses points in reverse order, but its X
+                // axis intentionally remains aligned with the outward stroke.
+                Eigen::Vector3d xAxis = Eigen::Vector3d::UnitX();
+                if(pointIndex + 1 < layerPoints.size()) {
+                    xAxis = layerPoints[pointIndex + 1] - point;
+                } else if(pointIndex > 0) {
+                    xAxis = point - layerPoints[pointIndex - 1];
                 }
-                else if (layerIndex < layerPoints.size() - 1) {
-                    // Middle layer
-                    Eigen::Vector3d dir = layerPoints[layerIndex + 1] - point;
-                    if (dir.norm() > 1e-8) yAxis = dir.normalized();
-                }
-                else {
-                    // Top layer
-                    if (layerIndex > 0) {
-                        Eigen::Vector3d dir = point - layerPoints[layerIndex - 1];
-                        if (dir.norm() > 1e-8) yAxis = dir.normalized();
-                    }
-                }
-
-                // 3. Compute tangent (X-axis)
-                // X = Y x Z (right-hand rule)
-                Eigen::Vector3d xAxis = yAxis.cross(surfaceNormal);
-                if (xAxis.norm() > 1e-8) {
-                    xAxis.normalize();
-                }
-                else {
-                    // Handle a tangent parallel to the normal with a stable
-                    // perpendicular reference axis.
+                // A pose frame must be orthogonal: preserve the part of the
+                // travel direction lying in the tangent plane.
+                xAxis -= surfaceNormal * xAxis.dot(surfaceNormal);
+                if(xAxis.norm() <= 1e-8) {
                     const Eigen::Vector3d referenceAxis =
                         std::abs(surfaceNormal.z()) < 0.9
-                        ? Eigen::Vector3d::UnitZ()
-                        : Eigen::Vector3d::UnitY();
-                    xAxis = referenceAxis.cross(surfaceNormal).normalized();
+                        ? Eigen::Vector3d::UnitZ() : Eigen::Vector3d::UnitY();
+                    xAxis = referenceAxis.cross(surfaceNormal);
                 }
-
-                // 4. Re-orthogonalize Y-axis to ensure an orthonormal frame.
-                yAxis = surfaceNormal.cross(xAxis).normalized();
+                xAxis.normalize();
+                Eigen::Vector3d yAxis = surfaceNormal.cross(xAxis).normalized();
 
                 // 5. The tool position is offset opposite to its pose normal.
                 // The distance sign has already selected the normal direction
@@ -679,20 +619,9 @@ namespace ModelTrajPlan
                     std::abs(trajParams.offsetDistance);
                 Eigen::Vector3d zAxis = surfaceNormal;
 
-                // 6. Build rotation matrix (original right-handed frame)
+                // 6. Build the right-handed frame: X follows travel, Z is
+                // the spray normal, and Y is derived from them.
                 Eigen::Matrix3d rotationMatrix;
-                // Rebuild X/Y for the final signed Z direction.
-                xAxis = yAxis.cross(zAxis);
-                if (xAxis.norm() <= 1e-8) {
-                    const Eigen::Vector3d referenceAxis =
-                        std::abs(zAxis.z()) < 0.9
-                        ? Eigen::Vector3d::UnitZ()
-                        : Eigen::Vector3d::UnitY();
-                    xAxis = referenceAxis.cross(zAxis).normalized();
-                } else {
-                    xAxis.normalize();
-                }
-                yAxis = zAxis.cross(xAxis).normalized();
                 rotationMatrix.col(0) = xAxis;
                 rotationMatrix.col(1) = yAxis;
                 rotationMatrix.col(2) = zAxis;
@@ -725,6 +654,43 @@ namespace ModelTrajPlan
             }
         }
 
+        // Empty-run points are translations of the adjacent physical boundary
+        // layer. Reconstructing X/Y from an offset point can rotate its frame
+        // at an end corner, so copy the completed boundary pose verbatim and
+        // retain only the offset point's translation.
+        if((trajParams.z1Offset != 0.0 || trajParams.z2Offset != 0.0) &&
+            !trajectoryPoints.empty()) {
+            std::map<std::pair<int, int>, Eigen::Matrix4d> boundaryPoses;
+            for(const TrajectoryPoint& point : trajectoryPoints) {
+                boundaryPoses[{ point.trajectory_index, point.layer_index }] = point.pose;
+            }
+            for(TrajectoryPoint& point : trajectoryPoints) {
+                if(point.trajectory_index < 0 ||
+                    point.trajectory_index >= static_cast<int>(sampledPoints.size())) {
+                    continue;
+                }
+                const int layerCount = static_cast<int>(sampledPoints[
+                    static_cast<std::size_t>(point.trajectory_index)].size());
+                int sourceLayer = -1;
+                if(trajParams.z1Offset != 0.0 && point.layer_index == 0) {
+                    sourceLayer = 1;
+                } else if(trajParams.z2Offset != 0.0 && point.layer_index == layerCount - 1) {
+                    sourceLayer = layerCount - 2;
+                }
+                const auto source = boundaryPoses.find({ point.trajectory_index, sourceLayer });
+                if(source == boundaryPoses.end()) {
+                    continue;
+                }
+                const Eigen::Vector3d position = point.pose.block<3, 1>(0, 3);
+                point.pose = source->second;
+                point.pose.block<3, 1>(0, 3) = position;
+            }
+        }
+        if (trajParams.previewFirstPoint && trajectoryPoints.size() > 1) trajectoryPoints.resize(1);
+        const Eigen::Matrix3d mapping = trajectoryFrameMapping(trajParams.normalAxis, trajParams.forwardAxis);
+        for (auto& point : trajectoryPoints) {
+            point.pose.block<3, 3>(0, 0) = (point.pose.block<3, 3>(0, 0) * mapping).eval();
+        }
         return !trajectoryPoints.empty();
     }
 
@@ -766,8 +732,8 @@ namespace ModelTrajPlan
 
             // --- 2. Locate the global skeleton seam on this contour. ---
             // The reference plane crosses each slicing plane at one surface
-            // point. Use that point as P(0), then place c0 and c(N-1) half a
-            // spacing to its two sides: P((i + 0.5) * L / N).
+            // point. Use that point as P(0), so c0 lies directly on the
+            // cutting-line reference instead of half a pitch beside it.
             double seamLength = 0.0;
             double bestDistanceSq = std::numeric_limits<double>::infinity();
             if (phaseReferenceLine.size() >= 2 && currLine.normal.norm() > 1e-8) {
@@ -816,9 +782,9 @@ namespace ModelTrajPlan
                 // the crossing, use the reference point closest to this plane
                 // rather than silently resetting the seam to contour point 0.
                 if (seamCandidates.empty()) {
-                    qWarning() << "Phase reference did not intersect contour plane; using nearest reference point."
+                    std::cerr << "Phase reference did not intersect contour plane; using nearest reference point."
                         << "layer" << static_cast<int>(bIdx)
-                        << "plane distance" << nearestPlaneDistance;
+                        << "plane distance" << nearestPlaneDistance << std::endl;
                     seamCandidates.push_back(nearestReferencePoint);
                 }
 
@@ -842,7 +808,7 @@ namespace ModelTrajPlan
                 }
             }
 
-            // --- 3. Select the same c0 side of the global skeleton plane. ---
+            // --- 3. Select a consistent direction from the skeleton plane. ---
             // Boundary contours can be stored in the opposite winding from
             // internal slice contours. Do not mutate their points or normals;
             // only choose the output parameter direction so c0 is consistently
@@ -851,18 +817,17 @@ namespace ModelTrajPlan
             if (phaseReferencePlaneNormal.norm() > 1e-8) {
                 const Eigen::Vector3d seamPoint =
                     getPointAtLength(currLine.points, cumLengths, totalLength, seamLength);
-                const double halfStep = totalLength / (2.0 * numTrajectories);
-                const Eigen::Vector3d forwardC0 = getPointAtLength(
-                    currLine.points, cumLengths, totalLength, seamLength + halfStep);
-                reverseSampling = phaseReferencePlaneNormal.dot(forwardC0 - seamPoint) < 0.0;
+                const Eigen::Vector3d forwardC1 = getPointAtLength(
+                    currLine.points, cumLengths, totalLength,
+                    seamLength + totalLength / numTrajectories);
+                reverseSampling = phaseReferencePlaneNormal.dot(forwardC1 - seamPoint) < 0.0;
             }
 
-            // --- 4. Generate half-step, evenly spaced trajectory points. ---
+            // --- 4. Generate evenly spaced trajectory points from the cutting line. ---
             for (int trajIdx = 0; trajIdx < numTrajectories; ++trajIdx) {
-                const double halfStep = totalLength / (2.0 * numTrajectories);
                 const double targetLength = reverseSampling
-                    ? seamLength - halfStep - (totalLength * trajIdx) / numTrajectories
-                    : seamLength + halfStep + (totalLength * trajIdx) / numTrajectories;
+                    ? seamLength - (totalLength * trajIdx) / numTrajectories
+                    : seamLength + (totalLength * trajIdx) / numTrajectories;
 
                 Eigen::Vector3d pt = getPointAtLength(currLine.points, cumLengths, totalLength, targetLength);
                 result[trajIdx].push_back(pt);
@@ -1133,42 +1098,4 @@ namespace ModelTrajPlan
         return oss.str();
     }
 
-    bool TrajectoryGenerator::draw(TrajectoryRenderData& renderData,
-        const std::vector<TrajectoryPoint>& trajectoryPoints,
-        float frameScale) const
-    {
-        // 1. Check trajectory data
-        if (trajectoryPoints.empty()) {
-            return false;
-        }
-
-        // 2. Visibility control
-        if (!renderData.isVisible) {
-            return false;
-        }
-
-        // 3. Check model existence
-        if (!renderData.trajectoryModel) {
-            return false;
-        }
-
-        // 4. Update data only when needed
-        if (renderData.needsUpdate) {
-            TrajectoryFrame::convertTrajectoryPointsToModelData(
-                trajectoryPoints,
-                frameScale,
-                renderData.trajectoryData
-            );
-
-            if (!renderData.trajectoryData.m_vertices.empty()) {
-                renderData.trajectoryModel->import(renderData.trajectoryData);
-            }
-
-            renderData.needsUpdate = false;
-        }
-
-        renderData.trajectoryModel->draw();
-
-        return true;
-    }
 }

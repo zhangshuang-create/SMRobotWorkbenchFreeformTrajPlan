@@ -1,11 +1,7 @@
 #pragma once
 
 #include "TrajectoryConnector_global.h"
-#include <GeneralData/GeneralData.h>
-#include <RenderData/RenderData.h>
-#include <ModelTangQing/imodel.h>
-#include <ModelTangQing/MeshData.h>
-#include <ModelTangQing/iscene.h>
+#include <SlicingTrajPlan/GeneralData.h>
 #include <Eigen/Dense>
 #include <vector>
 #include <memory>
@@ -32,8 +28,6 @@ namespace ModelTrajPlan
             ConnectionStrategy strategy,
             TrajData& trajData);
 
-        bool initializeRenderer(ConnectionRenderData& renderData);
-
         // [ALGORITHM] Convert trajectory points to grouped format using sampled boundary points structure
         // Input: trajectoryPoints - flat trajectory points vector (ordered by trajectory, then by layer)
         //        sampledBoundaryPoints - structure that defines grouping [trajectoryIndex][layerIndex]
@@ -41,17 +35,6 @@ namespace ModelTrajPlan
         static std::vector<std::vector<TrajectoryPoint>> convertTrajectoryPointsToGroupedFormat(
             const std::vector<TrajectoryPoint>& trajectoryPoints,
             const std::vector<std::vector<Eigen::Vector3d>>& sampledBoundaryPoints);
-
-        // === Visualization functionality (pure algorithm) ===
-
-
-        // [RENDER] Draw connection lines
-        // Input: trajData.connectionData_ - connection data
-        // Output: renderData - rendering calls
-        static bool draw(ConnectionRenderData& renderData, const TrajData& trajData);
-
-        // Set connection line visibility
-        static void setConnectionVisibility(ConnectionRenderData& renderData, bool visible);
 
         // === State query (read from data) ===
 
@@ -71,17 +54,5 @@ namespace ModelTrajPlan
             const std::vector<std::vector<TrajectoryPoint>>& groupedTrajectories,
             ConnectionData& connectionData);
 
-        // [RENDER] Prepare render data
-        // Input: connectionSegments - connection segment data
-        // Output: renderData - updated rendering data
-        static void prepareRenderData(ConnectionRenderData& renderData,
-            const std::vector<ConnectionSegment>& connectionSegments);
-
-        // [ALGORITHM] Data conversion
-        static MeshData convertConnectionSegmentsToModelData(
-            const std::vector<ConnectionSegment>& connectionSegments);  // Return-by-value version
-        static void convertConnectionSegmentsToModelData(
-            const std::vector<ConnectionSegment>& connectionSegments,
-            MeshData& connectionData);  // Reference-parameter version (avoids temporaries)
     };
 }

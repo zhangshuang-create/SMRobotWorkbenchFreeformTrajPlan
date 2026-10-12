@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.20)
+
+add_executable(FreeformTrajPlanTrajectoryDocumentTest main.cpp)
+target_link_libraries(FreeformTrajPlanTrajectoryDocumentTest PRIVATE SMRobotSpray::SprayFreeformTrajPlan)
+target_compile_features(FreeformTrajPlanTrajectoryDocumentTest PRIVATE cxx_std_17)
+set_target_properties(FreeformTrajPlanTrajectoryDocumentTest PROPERTIES FOLDER tests/SMRobotSpray/SprayFreeformTrajPlan)
+add_test(NAME FreeformTrajPlanTrajectoryDocumentTest COMMAND $<TARGET_FILE:FreeformTrajPlanTrajectoryDocumentTest>)
+set_tests_properties(FreeformTrajPlanTrajectoryDocumentTest PROPERTIES LABELS "SMRobotSpray;SprayFreeformTrajPlan;Trajectory;Document;BurTrajPlan")

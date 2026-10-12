@@ -1,9 +1,7 @@
-#include <UniformSlicer/UniformSlicer.h>
-#include <GeneralData/GeneralData.h>
-#include <STLProcessor/STLProcessor.h>
-#include <BoundaryDetector/BoundaryDetector.h>
-#include <ModelTangQing/iscene.h>
-#include <ModelTangQing/imodel.h>
+#include <SlicingTrajPlan/UniformSlicer.h>
+#include <SlicingTrajPlan/GeneralData.h>
+#include <SlicingTrajPlan/STLProcessor.h>
+#include <SlicingTrajPlan/BoundaryDetector.h>
 #include <algorithm>
 #include <cmath>
 #include <numeric>
@@ -11,7 +9,6 @@
 #include <map>
 #include <limits>
 #include <iostream>
-#include <QDebug>
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
@@ -66,13 +63,41 @@ bool UniformSlicer::performSlicing(const ModelData& modelData,
             }
         }
         slicingLocations.clear();
-        if (params.mode == SlicingMode::Parallel) {
+        const bool hasBothBoundaries = !upperBoundary.points.empty() &&
+            !lowerBoundary.points.empty();
+        if (!hasBothBoundaries) {
+            // A closed mesh has no physical end rims or skeleton.  Its
+            // editable slicing domain is therefore the global STL Z extent.
+            Eigen::Vector3d boundsMin = Eigen::Vector3d::Zero();
+            Eigen::Vector3d boundsMax = Eigen::Vector3d::Zero();
+            STLProcessor::calculateBounds(modelData.mainModelData_, boundsMin, boundsMax);
+            zMin = boundsMin.z();
+            zMax = boundsMax.z();
+            const double height = zMax - zMin;
+            if (!std::isfinite(zMin) || !std::isfinite(zMax) || height <= 1e-9 ||
+                !std::isfinite(params.minStep) || params.minStep <= 0.0) {
+                return false;
+            }
+
+            const int layerCount = params.maxSliceCount > 0
+                ? params.maxSliceCount
+                : std::max(2, static_cast<int>(std::floor(height / params.minStep)) + 1);
+            slicingLocations.reserve(static_cast<size_t>(layerCount));
+            for (int index = 0; index < layerCount; ++index) {
+                // Keep planes inside the mesh range to avoid vertex-only
+                // intersections at the two extrema.
+                const double ratio = static_cast<double>(index + 1) /
+                    static_cast<double>(layerCount + 1);
+                slicingLocations.push_back({
+                    Eigen::Vector3d(0.0, 0.0, zMin + height * ratio),
+                    Eigen::Vector3d::UnitZ() });
+            }
+            sliceResult.isBoundarylessFallback = true;
+        }
+        else if (params.mode == SlicingMode::Parallel) {
             if (upperBoundary.points.empty() || lowerBoundary.points.empty() ||
                 !std::isfinite(params.minStep) || params.minStep <= 0.0 ||
                 !std::isfinite(zMin) || !std::isfinite(zMax)) {
-                qWarning() << "UniformSlicer: invalid parallel inputs: upperPoints="
-                           << upperBoundary.points.size() << "lowerPoints=" << lowerBoundary.points.size()
-                           << "minStep=" << params.minStep << "zMin=" << zMin << "zMax=" << zMax;
                 return false;
             }
 
@@ -88,20 +113,25 @@ bool UniformSlicer::performSlicing(const ModelData& modelData,
             }
 
             const double height = upperMinZ - lowerMaxZ;
-            const int layerCount = static_cast<int>(std::floor(height / params.minStep));
-            if (!std::isfinite(height) || height <= 0.0 || layerCount <= 0) {
-                qWarning() << "UniformSlicer: invalid parallel range: upperMinZ=" << upperMinZ
-                           << "lowerMaxZ=" << lowerMaxZ << "height=" << height
-                           << "minStep=" << params.minStep << "layerCount=" << layerCount;
+            const int intervalCount = static_cast<int>(std::floor(height / params.minStep));
+            if (!std::isfinite(height) || height <= 0.0 || intervalCount <= 0) {
                 return false;
             }
 
             // The two boundary contours are consumed directly by trajectory
             // generation. Only create the strictly internal planes here;
             // otherwise the top/bottom boundary would be represented twice.
-            slicingLocations.reserve(static_cast<size_t>(std::max(0, layerCount - 1)));
-            for (int i = 1; i < layerCount; ++i) {
-                const double ratio = static_cast<double>(i) / static_cast<double>(layerCount);
+            // A positive limit is an upper bound on the final internal planes,
+            // for both adaptive and parallel (uniform) slicing.  When capped,
+            // redistribute the retained planes across the original range.
+            const int uncappedInternalCount = std::max(0, intervalCount - 1);
+            const int internalCount = params.maxSliceCount > 0
+                ? std::min(uncappedInternalCount, params.maxSliceCount)
+                : uncappedInternalCount;
+            slicingLocations.reserve(static_cast<size_t>(internalCount));
+            for (int i = 1; i <= internalCount; ++i) {
+                const double ratio = static_cast<double>(i) /
+                    static_cast<double>(internalCount + 1);
                 SlicePlane plane;
                 plane.point = Eigen::Vector3d(0.0, 0.0, lowerMaxZ + height * ratio);
                 plane.normal = Eigen::Vector3d::UnitZ();
@@ -109,7 +139,6 @@ bool UniformSlicer::performSlicing(const ModelData& modelData,
             }
         }
         else if (!buildSlicePlanes(slicingnode, slicingLocations)) {
-            qWarning() << "UniformSlicer: buildSlicePlanes failed; slicing nodes=" << slicingnode.size();
             return false;
         }
         // Generate internal boundary lines
@@ -214,12 +243,14 @@ bool UniformSlicer::performSlicing(const ModelData& modelData,
         // A valid Parallel range may contain only the two boundary contours
         // when floor(height / minStep) == 1, so an empty internal contour set
         // is still a valid slicing result in that mode.
+        if (sliceResult.isBoundarylessFallback) {
+            return !sliceResult.internalBoundaries.empty();
+        }
         return params.mode == SlicingMode::Parallel
             ? (std::isfinite(zMin) && std::isfinite(zMax) && !upperBoundary.points.empty() && !lowerBoundary.points.empty())
             : !sliceResult.internalBoundaries.empty();
     }
-    catch (const std::exception& e) {
-        qWarning() << "UniformSlicer: exception:" << e.what();
+    catch (const std::exception&) {
         return false;
     }
 }
@@ -607,6 +638,27 @@ bool UniformSlicer::buildSlicePlanes(
     if (n < 2)
         return false;
 
+    bool projected = true;
+    for (size_t i = 0; i < n; ++i)
+        projected = projected && (line3[i].position - 0.5 *
+            (line1[i].position + line2[i].position)).norm() < 1e-7;
+    if (projected) {
+        if (n == 2) {
+            const Eigen::Vector3d tangent = line3.back().position - line3.front().position;
+            if (tangent.norm() < 1e-8) return false;
+            planes.emplace_back(SlicePlane{0.5 * (line3.front().position + line3.back().position), tangent.normalized()});
+        } else {
+            for (size_t i = 1; i + 1 < n; ++i) {
+                Eigen::Vector3d tangent = line3[i].tangent;
+                if (!tangent.allFinite() || tangent.norm() < 1e-8)
+                    tangent = line3[i + 1].position - line3[i - 1].position;
+                if (tangent.norm() > 1e-8)
+                    planes.emplace_back(SlicePlane{line3[i].position, tangent.normalized()});
+            }
+        }
+        return !planes.empty();
+    }
+
     const double tol = 1e-4; // 娴溿倗鍋ｇ€圭懓妯婇敍鍧閿?
 
     // ============================
@@ -873,138 +925,6 @@ std::vector<Eigen::Vector3d> UniformSlicer::calculateSTLIntersectionWithPlane(
 // 閼卞矁鐭楁潪顒傂╅敍姘崇箹娴滄稑濮涢懗鐣屽箛閸︺劎鏁?TrajectoryGenerator 鐠愮喕鐭?
 // UniformSlicer 閸欘亣绀嬬拹锝呭殤娴ｆ洘鐪版禍銈忕礉鐠侊紕鐣绘担宥囩枂娣団剝浼呴敍鍧昻ternalBoundaries閿?
 
-bool UniformSlicer::initializeRenderer(SlicingRenderData& renderData)
-{
-    // 鏉╂瑩鍣锋稉宥呭晙娓氭繆绂?scene閿涘牆娲滄稉鍝勫嚒缂佸繐顦婚柈銊ь吀閻炲棴绱?
-    renderData.needsUpdate = true;
-
-    return true;
-}
-
-
-
-// [ALGORITHM] Hue to RGB conversion helper for generating vivid colors
-// Input: h - hue value (0-1)
-// Output: Vector3f - RGB color
-Eigen::Vector3f UniformSlicer::hue2rgb(float h) {
-    float r = 0, g = 0, b = 0;
-    int k = static_cast<int>(h * 6.0f);
-    float f = h * 6.0f - k;
-    switch (k % 6) {
-    case 0: r = 1; g = f; b = 0; break;
-    case 1: r = 1 - f; g = 1; b = 0; break;
-    case 2: r = 0; g = 1; b = f; break;
-    case 3: r = 0; g = 1 - f; b = 1; break;
-    case 4: r = f; g = 0; b = 1; break;
-    default: r = 1; g = 0; b = 1 - f; break;
-    }
-    return Eigen::Vector3f(r, g, b);
-}
-
-
-// 閸掓稑缂撻崚鍥╁楠炴娊娼板〒鍙夌厠濡€崇€烽敍鍫滅矤BurTrajPlan缁夋槒绻冮弶銉ф畱缁犳纭堕敍?
-// 濞夈劍鍓伴敍姘崇箹娑擃亝鏌熷▔鏇氱矝閻掑爼娓剁憰浣界箲閸?imodel閿涘苯娲滄稉鍝勭暊閸?BurTrajPlan 娑擃叀顫﹂惄瀛樺复娴ｈ法鏁?
-imodel_spointer UniformSlicer::createCuttingPlanesModel(
-    SlicingRenderData& renderData,
-    const std::vector<CuttingPlane>& cuttingPlanes,
-    const SliceResult& sliceResult)
-{
-    if (cuttingPlanes.empty()) {
-        return nullptr;
-    }
-
-    // 閼惧嘲褰囧鑼病閸掓稑缂撴總鐣屾畱濡€崇€?
-    imodel_spointer cuttingPlanesModel = renderData.sliceModel;
-
-    if (!cuttingPlanesModel) {
-        return nullptr;
-    }
-
-    // Use persistent data buffer.
-    MeshData& meshData = renderData.sliceData;
-    meshData.m_vertices.clear();
-    meshData.m_indices.clear();
-
-    for (size_t i = 0; i < cuttingPlanes.size(); ++i) {
-        const auto& plane = cuttingPlanes[i];
-
-        if (plane.vertices.size() != 4) {
-            continue;
-        }
-
-        float r, g, b;
-
-        if (plane.isSelected) {
-            r = 1.0f;
-            g = 1.0f;
-            b = 0.2f;
-        }
-        else {
-            static const float colorTable[][3] = {
-                {1.0f, 0.2f, 0.2f},
-                {0.2f, 1.0f, 0.2f},
-                {1.0f, 0.2f, 1.0f},
-                {0.2f, 1.0f, 1.0f},
-                {1.0f, 0.6f, 0.2f},
-                {0.6f, 0.2f, 1.0f},
-                {0.2f, 0.6f, 1.0f},
-                {0.2f, 0.8f, 1.0f},
-                {1.0f, 0.2f, 0.8f},
-                {1.0f, 0.2f, 0.6f},
-                {0.6f, 1.0f, 0.8f},
-                {0.8f, 0.6f, 1.0f}
-            };
-
-            int colorIndex = i % 12;
-
-            r = colorTable[colorIndex][0];
-            g = colorTable[colorIndex][1];
-            b = colorTable[colorIndex][2];
-        }
-
-        float alpha = 0.7f;
-
-        // 妞ゅ墎鍋ｉ崣妯诲床
-        std::vector<Eigen::Vector3d> transformedVertices =
-            applyTransformationToVertices(
-                plane.vertices,
-                plane.center,
-                plane.translation_x, plane.translation_y, plane.translation_z,
-                plane.rotation_x, plane.rotation_y, plane.rotation_z
-            );
-
-        unsigned int baseIndex =
-            static_cast<unsigned int>(meshData.m_vertices.size() / 7);
-
-        for (int j = 0; j < 4; ++j) {
-            const auto& v = transformedVertices[j];
-
-            meshData.m_vertices.push_back((float)v.x());
-            meshData.m_vertices.push_back((float)v.y());
-            meshData.m_vertices.push_back((float)v.z());
-            meshData.m_vertices.push_back(r);
-            meshData.m_vertices.push_back(g);
-            meshData.m_vertices.push_back(b);
-            meshData.m_vertices.push_back(alpha);
-        }
-
-        // 娑撱倓閲滄稉澶庮潡瑜?
-        meshData.m_indices.push_back(baseIndex + 0);
-        meshData.m_indices.push_back(baseIndex + 1);
-        meshData.m_indices.push_back(baseIndex + 2);
-
-        meshData.m_indices.push_back(baseIndex + 0);
-        meshData.m_indices.push_back(baseIndex + 2);
-        meshData.m_indices.push_back(baseIndex + 3);
-    }
-
-    if (!meshData.m_vertices.empty() && !meshData.m_indices.empty()) {
-        cuttingPlanesModel->import(meshData);
-    }
-
-    return cuttingPlanesModel;
-}
-
 // [NEW] Apply transformation parameters to vertices around center point (static helper function)
 std::vector<Eigen::Vector3d> UniformSlicer::applyTransformationToVertices(
     const std::vector<Eigen::Vector3d>& vertices,
@@ -1177,43 +1097,5 @@ bool UniformSlicer::updateSingleCuttingPlaneSize(CuttingPlane& plane,
     return true;
 }
 
-bool UniformSlicer::draw(SlicingRenderData& renderData,
-    const SlicingData& slicing) const
-{
-    // 1. 濡偓閺屻儱鍨忛悧鍥ㄦ殶閹?
-    if (slicing.cuttingPlanes_.empty()) {
-        return false;
-    }
-
-    // 2. 閸欘垵顫嗛幀褎甯堕崚?
-    if (!renderData.isVisible) {
-        return false;
-    }
-
-    // 3. 濡偓閺屻儲膩閸ㄥ妲搁崥锕€鐡ㄩ崷?
-    if (!renderData.sliceModel) {
-        return false;
-    }
-
-    // 4. 婵″倹鐏夐棁鈧憰浣规纯閺?閳?閸忓牆鍣径鍥ㄦ殶閹诡噯绱欓摶宥呮値 prepare 闁槒绶敍?
-    if (renderData.needsUpdate) {
-        createCuttingPlanesModel(
-            renderData,
-            slicing.cuttingPlanes_,
-            slicing.currentSliceResult_
-        );
-
-        renderData.needsUpdate = false;
-    }
-
-    // 5. 濞撳弶鐓?
-    if (!renderData.sliceData.m_vertices.empty()) {
-        renderData.sliceModel->import(renderData.sliceData);
-        renderData.sliceModel->draw();
-        return true;
-    }
-
-    return false;
-}
 }
 

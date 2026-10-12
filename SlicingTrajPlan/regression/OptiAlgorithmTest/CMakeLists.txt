@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.20)
+
+add_executable(FreeformTrajPlanOptiAlgorithmTest main.cpp)
+target_link_libraries(FreeformTrajPlanOptiAlgorithmTest PRIVATE SMRobotSpray::SprayFreeformTrajPlan)
+target_compile_features(FreeformTrajPlanOptiAlgorithmTest PRIVATE cxx_std_17)
+set_target_properties(FreeformTrajPlanOptiAlgorithmTest PROPERTIES FOLDER tests/SMRobotSpray/SprayFreeformTrajPlan)
+add_test(NAME FreeformTrajPlanOptiAlgorithmTest COMMAND $<TARGET_FILE:FreeformTrajPlanOptiAlgorithmTest>)
+set_tests_properties(FreeformTrajPlanOptiAlgorithmTest PROPERTIES LABELS "SMRobotSpray;SprayFreeformTrajPlan;Optimization;PoseSelection")

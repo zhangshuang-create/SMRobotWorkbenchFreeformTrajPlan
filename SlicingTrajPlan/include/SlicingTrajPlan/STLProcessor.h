@@ -4,16 +4,9 @@
 #include <string>
 #include <memory>
 #include <Eigen/Dense>
-#include <ModelTangQing/iscene.h>
-#include <ModelTangQing/imodel.h>
-#include <GeneralData/GeneralData.h>
-#include <RenderData/RenderData.h>
-#include <ModelData/ModelData.h>  // Include PublicModel definition
+#include <SlicingTrajPlan/GeneralData.h>
 namespace ModelTrajPlan
 {
-    // Forward declaration
-    struct PublicModel;
-
     // STL processor class
     class STLProcessor_SHAREDLIB STLProcessor
     {
@@ -30,11 +23,8 @@ namespace ModelTrajPlan
 
 
         // === STL file processing ===
-    // [Deprecated] File loading API - prefer PublicModelData::loadModelFromFile() and then call the function below
+        // Load directly into the algorithm document's model data.
         bool preprocessSTL(const std::string& filePath, ModelData& modelData);
-
-        // [Recommended] Copy data from PublicModel to GeneralData
-        static bool copyFromPublicModel(const PublicData::PublicModel& publicModel, ModelData& modelData);
         // === Data query (read from parameters) ===
         static const PrivateModel& getModelData(const ModelData& modelData)
         {
@@ -42,17 +32,11 @@ namespace ModelTrajPlan
         }
         static bool hasValidData(const ModelData& modelData);
 
-        // === Rendering support (accepts RenderData as parameter) ===
-        bool initializeRenderer(STLRenderData& renderData);
-        bool draw(STLRenderData& renderData, const ModelData& modelData);
-        void setVisibility(STLRenderData& renderData, bool visible);
-
         // === Data cleanup ===
         void clear(ModelData& modelData);
 
         // === Helper methods ===
         void calculateBounds(const ModelData& modelData, Eigen::Vector3d& min, Eigen::Vector3d& max);
-        void updateRenderData(STLRenderData& renderData, const ModelData& modelData);
 
     private:
         // === No internal data storage ===
@@ -60,8 +44,5 @@ namespace ModelTrajPlan
         // Internal processing methods (pure algorithms)
         PrivateModel parseSTLFile(const std::string& filePath);
 
-        // [REFACTOR] Data conversion methods (pure data processing, no rendering)
-        static MeshData convertModelToMeshData(const PrivateModel& modelData);  // Return-by-value version
-        static void convertModelToMeshData(const PrivateModel& modelData, MeshData& meshData);  // Reference-parameter version (avoids temporaries)
     };
 }

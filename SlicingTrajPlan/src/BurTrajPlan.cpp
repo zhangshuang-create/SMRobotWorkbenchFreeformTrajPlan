@@ -1,21 +1,18 @@
-#include "BurTrajPlan.h"
-#include <TrajectoryGenerator/TrajectoryGenerator.h>
-#include <ModelData/ModelData.h> // 
+#include <SlicingTrajPlan/BurTrajPlan.h>
+#include <SlicingTrajPlan/TrajectoryGenerator.h>
 #include <algorithm>
 #include <iostream>
 #include <cmath>
 #include <memory>
 #include <limits>
-#include <STLProcessor/STLProcessor.h>
-#include <BoundaryDetector/BoundaryDetector.h>
-#include <UniformSlicer/UniformSlicer.h>
-#include <TrajectoryConnector/TrajectoryConnector.h>
-#include <TrajectoryGenerator/TrajectoryGenerator.h>
-#include <TrajectoryFrame/TrajectoryFrame.h>
-#include <QDebug>
+#include <SlicingTrajPlan/STLProcessor.h>
+#include <SlicingTrajPlan/BoundaryDetector.h>
+#include <SlicingTrajPlan/UniformSlicer.h>
+#include <SlicingTrajPlan/TrajectoryConnector.h>
+
 namespace ModelTrajPlan
 {
-    // �����˶�����ʵ��������ֵ����Ӧ������ָ���Ա����
+    // Constructor: Initialize algorithm module instances and set trajectory generator pointer to null
     BurTrajPlan::BurTrajPlan()
         : stlProcessor_(std::make_unique<STLProcessor>())
         , boundaryDetector_(std::make_unique<BoundaryDetector>())
@@ -35,38 +32,24 @@ namespace ModelTrajPlan
         }
     }
 
-
-    // ����������PublicModel�������ݵ�GeneralData
-    bool BurTrajPlan::loadModelFromPublicData(const PublicData::PublicModel& publicModel, GeneralData& generalData)
-    {
-        // �������Ǹոո�д�ľ�̬���ߺ���
-
-        generalData.hasOriginalData_ = true;
-
-        // Mark STL as processed
-        generalData.processingState_.isSTLProcessed = true;
-        return STLProcessor::copyFromPublicModel(publicModel, generalData.modelDataManager_);
-
-
-    }
-
     void BurTrajPlan::clear(GeneralData& generalData)
     {
         std::lock_guard<std::mutex> lock(mutex_);
         generalData.filePaths_.clear();
         generalData.modelDataManager_.allModelsData_.clear();
 
-        // ����켣����
+        // Clear trajectory data
         generalData.trajData_.trajectoryPoints_.clear();
-        generalData.trajData_.sampledBoundaryPoints_.clear();  // ���������������������
+        generalData.trajData_.sampledBoundaryPoints_.clear();  // Clear sampled boundary point data
 
-        // �����Ƭ����
+        // Clear slicing data
         generalData.slicingData_.cuttingPlanes_.clear();
         generalData.slicingData_.slicingLocations_.clear();
-        generalData.slicingData_.sliceLines_.clear();  // �������������Ƭ�߽���
-        generalData.slicingData_.currentSliceResult_ = SliceResult();  // ��������������Ƭ���
+        generalData.slicingData_.sliceLines_.clear();           // Clear slicing boundary line data
+        generalData.slicingData_.currentSliceResult_ = SliceResult();  // Reset current slice result
         generalData.slicingData_.managedParams_.customZPositions.clear();
         generalData.slicingData_.slicingisupdata = false;
+        
         if (stlProcessor_) {
             stlProcessor_->clear(generalData.modelDataManager_);
         }
@@ -95,9 +78,7 @@ namespace ModelTrajPlan
         generalData.currentState_ = DataState::Empty;
     }
 
-
-
-    bool BurTrajPlan::generateCuttingPlanes(GeneralData& generalData, RenderData* renderData)
+    bool BurTrajPlan::generateCuttingPlanes(GeneralData& generalData)
     {
         // [ALGORITHM] Generate cutting planes from model
         // Input: generalData.modelDataManager_.mainModelData_ - STL model
@@ -109,29 +90,45 @@ namespace ModelTrajPlan
             return false;
         }
 
-        // 2. Ensure boundary is detected
+        // 2. Try boundary detection. A mesh without two open boundaries uses
+        // UniformSlicer's independent whole-model fallback instead of failing.
         if (!generalData.processingState_.isBoundaryDetected) {
-            if (!runBoundaryDetection(generalData, renderData)) {
-                return false;
-            }
+            runBoundaryDetection(generalData);
+        }
+        const bool hasBothBoundaries = !generalData.boundaryData_.upperBoundary_.points.empty() &&
+            !generalData.boundaryData_.lowerBoundary_.points.empty();
+        if (!hasBothBoundaries) {
+            // Never mix a partial boundary or stale skeleton with the
+            // boundaryless path: it must be derived solely from the STL.
+            generalData.boundaryData_.upperBoundary_ = BoundaryLine();
+            generalData.boundaryData_.lowerBoundary_ = BoundaryLine();
+            generalData.boundaryData_.upperBoundaryOffset_ = BoundaryLine();
+            generalData.boundaryData_.lowerBoundaryOffset_ = BoundaryLine();
+            generalData.boundaryData_.intersectionPoints_.clear();
+            generalData.boundaryData_.projectedContourLines_.clear();
+            generalData.boundaryData_.phaseReferenceLine_.clear();
+            generalData.boundaryData_.phaseReferencePlaneNormal_.setZero();
+            generalData.boundaryData_.LinePoints_.clear();
+            generalData.boundaryData_.Mainslicingnode.clear();
         }
 
-        // Rebuild adaptive slicing nodes every run so UI-tuned epsilon/minStep take effect immediately.
-        if (generalData.slicingData_.managedParams_.mode == SlicingMode::AA &&
-            boundaryDetector_ && !generalData.boundaryData_.intersectionPoints_.empty()) {
+        // Rebuild adaptive slicing nodes every run so UI-tuned epsilon and minStep parameters take effect immediately
+        if (generalData.slicingData_.managedParams_.mode == SlicingMode::AA && hasBothBoundaries &&
+            boundaryDetector_ && !generalData.boundaryData_.projectedContourLines_.empty()) {
             Epiphyseal adaptiveNodes;
             const bool adaptiveOk = boundaryDetector_->generateAdaptiveNodes(
-                generalData.boundaryData_.intersectionPoints_,
+                generalData.boundaryData_.projectedContourLines_,
                 adaptiveNodes,
                 generalData.boundaryData_.epsilon_,
                 generalData.boundaryData_.minStep_);
 
             Epiphyseal slicingNodes;
             const bool slicingNodeOk = adaptiveOk && boundaryDetector_->buildSlicingNodes(
-                generalData.boundaryData_.intersectionPoints_,
+                generalData.boundaryData_.projectedContourLines_,
                 adaptiveNodes,
                 slicingNodes,
-                generalData.boundaryData_.minStep_);
+                generalData.boundaryData_.minStep_,
+                generalData.slicingData_.managedParams_.maxSliceCount);
 
             if (adaptiveOk && slicingNodeOk) {
                 generalData.boundaryData_.LinePoints_ = std::move(adaptiveNodes);
@@ -151,7 +148,7 @@ namespace ModelTrajPlan
         // 4. [Refactor Removed] No longer precompute offset boundaries
         // Offset boundaries are handled automatically by TrajectoryGenerator during trajectory generation
 
-        // 5. Execute slicing - pure module call
+        // 5. Execute slicing - pure algorithm module call
         if (!uniformSlicer_) {
             return false;
         }
@@ -159,44 +156,49 @@ namespace ModelTrajPlan
         const PrivateModel& modelData = generalData.modelDataManager_.mainModelData_;
         const BoundaryLine& upperBoundary = generalData.boundaryData_.upperBoundary_;
         const BoundaryLine& lowerBoundary = generalData.boundaryData_.lowerBoundary_;
+        
         // Prepare slicing parameters from generalData
         SlicingParams params = prepareSlicingParams(generalData, upperBoundary, lowerBoundary);
+        
         // Execute slicing
         ModelData tempModelData2;
         tempModelData2.mainModelData_ = modelData;
 
         SliceResult sliceResult;
-        // Prefer adaptive slicing nodes; fallback to raw intersection lines if adaptive nodes are unavailable.
+        // Prefer adaptive slicing nodes; fallback to the projected contour
+        // envelope if adaptive nodes are unavailable.
         Epiphyseal* slicingNodeInput = &generalData.boundaryData_.Mainslicingnode;
         if (slicingNodeInput->size() < 3) {
-            std::cerr << "[BurTrajPlan] Fallback to intersectionPoints_ because Mainslicingnode is invalid. "
+            std::cerr << "[BurTrajPlan] Fallback to projectedContourLines_ because Mainslicingnode is invalid. "
                 << "This may reduce epsilon/min_step sensitivity. "
                 << "Mainslicingnode.size=" << generalData.boundaryData_.Mainslicingnode.size()
                 << ", epsilon=" << generalData.boundaryData_.epsilon_
                 << ", minStep=" << generalData.boundaryData_.minStep_
                 << std::endl;
-            slicingNodeInput = &generalData.boundaryData_.intersectionPoints_;
+            slicingNodeInput = &generalData.boundaryData_.projectedContourLines_;
         }
+        
         // [Modified] performSlicing can now generate base cuttingPlanes at the same time
-        // Pass oldCuttingPlanes to preserve transform parameters
+        // Pass oldCuttingPlanes to preserve pose and transform parameters
         if (!uniformSlicer_->performSlicing(tempModelData2, upperBoundary, lowerBoundary, params,
             generalData.slicingData_.slicingLocations_,
             *slicingNodeInput,
             sliceResult,
             &generalData.slicingData_.cuttingPlanes_,
             oldCuttingPlanes.empty() ? nullptr : &oldCuttingPlanes)) {
-            qWarning() << "[BurTrajPlan] generateCuttingPlanes: UniformSlicer::performSlicing returned false"
-                       << "mode=" << static_cast<int>(params.mode)
-                       << "upperPoints=" << upperBoundary.points.size()
-                       << "lowerPoints=" << lowerBoundary.points.size()
-                       << "minStep=" << params.minStep;
+            std::cerr << "[BurTrajPlan] generateCuttingPlanes: UniformSlicer::performSlicing returned false"
+                      << ", mode=" << static_cast<int>(params.mode)
+                      << ", upperPoints=" << upperBoundary.points.size()
+                      << ", lowerPoints=" << lowerBoundary.points.size()
+                      << ", minStep=" << params.minStep
+                      << std::endl;
             return false;
         }
 
         // 6. Store slice result
         generalData.slicingData_.currentSliceResult_ = sliceResult;
 
-        // Update slicing state
+        // Update slicing completed state
         updateSlicingState(generalData, sliceResult);
 
         return true;
@@ -207,12 +209,12 @@ namespace ModelTrajPlan
     {
         generalData.slicingData_.cuttingPlanes_.clear();
         generalData.slicingData_.slicingLocations_.clear();
-        generalData.slicingData_.sliceLines_.clear();  // [Addition] Clear slicing boundary lines
+        generalData.slicingData_.sliceLines_.clear();            // [Addition] Clear slicing boundary contour lines
         generalData.trajData_.trajectoryPoints_.clear();
-        generalData.trajData_.sampledBoundaryPoints_.clear();  // [Addition] Clear sampled point data
+        generalData.trajData_.sampledBoundaryPoints_.clear();    // [Addition] Clear sampled point data
     }
 
-    // [ALGORITHM] Prepare slicing parameters from generalData
+    // [ALGORITHM] Prepare and validate slicing parameters from generalData
     // Input: generalData.slicingData_.managedParams_ - parameter settings
     //        upperBoundary, lowerBoundary - for Z validation
     // Output: SlicingParams - validated parameters ready for slicing
@@ -222,12 +224,13 @@ namespace ModelTrajPlan
         const BoundaryLine& lowerBoundary)
     {
         SlicingParams params;
-        // ���ع���ֻ��ȡ��Ƭ��ز���
+        // Refactored to only extract parameters closely related to slicing
         params.numTrajectories = generalData.slicingData_.managedParams_.numTrajectories;
         params.trajectorySpacing = generalData.slicingData_.managedParams_.trajectorySpacing;
         params.minStep = generalData.boundaryData_.minStep_;
+        params.maxSliceCount = generalData.slicingData_.managedParams_.maxSliceCount;
         params.mode = generalData.slicingData_.managedParams_.mode;
-        // ƫ�Ʋ������Ƴ������ٴ� SlicingParams ��ȡ
+        // Offset parameters have been decoupled and are no longer fetched from SlicingParams
 
         // Validate and filter custom Z positions
         if (!generalData.slicingData_.managedParams_.customZPositions.empty()) {
@@ -241,19 +244,19 @@ namespace ModelTrajPlan
         return params;
     }
 
-    // [NEW] Dedicated function to validate Z positions
+    // [NEW] Dedicated function to validate and clean custom Z layer positions
     std::vector<double> BurTrajPlan::validateZPositions(const std::vector<double>& zPositions,
         const BoundaryLine& upperBoundary,
         const BoundaryLine& lowerBoundary)
     {
-        // Calculate Z range
+        // Calculate Z range bounded by upper and lower boundaries
         double zMin = std::numeric_limits<double>::max();
         double zMax = std::numeric_limits<double>::lowest();
 
         for (const auto& p : lowerBoundary.points) zMin = std::min(zMin, p.position.z());
         for (const auto& p : upperBoundary.points) zMax = std::max(zMax, p.position.z());
 
-        // Sort, deduplicate, filter
+        // Sort, deduplicate, filter out-of-range layers
         std::vector<double> validZPositions = zPositions;
         std::sort(validZPositions.begin(), validZPositions.end());
         validZPositions.erase(std::unique(validZPositions.begin(), validZPositions.end()), validZPositions.end());
@@ -266,103 +269,21 @@ namespace ModelTrajPlan
         return validZPositions;
     }
 
-    // [ALGORITHM] Update slicing state after slicing completes
-    // Input: sliceResult - slice result from algorithm
+    // [ALGORITHM] Update internal state and layer positions after slicing completes
+    // Input: sliceResult - slice result from algorithm module
     // Output: generalData.processingState_.isSlicingCompleted - state flag
-    //         generalData.slicingData_.managedParams_.customZPositions - Z positions
+    //         generalData.slicingData_.managedParams_.customZPositions - write back layer heights
     void BurTrajPlan::updateSlicingState(GeneralData& generalData, const SliceResult& sliceResult)
     {
         generalData.processingState_.isSlicingCompleted = true;
         generalData.currentState_ = DataState::EdgeExtracted;
 
-        // Write back Z layer position information to generalData
+        // Write back actual sliced Z layer coordinates to managedParams
         generalData.slicingData_.managedParams_.customZPositions.clear();
         for (const auto& b : sliceResult.internalBoundaries) {
             generalData.slicingData_.managedParams_.customZPositions.push_back(b.z_level);
         }
     }
-
-    // === Rendering implementation (receives RenderData as parameter) ===
-    bool BurTrajPlan::initializeRenderer(RenderData& renderData)
-    {
-        // Initialize renderers for all processing modules
-
-        // Initialize STL processing module renderer
-        if (stlProcessor_) {
-            stlProcessor_->initializeRenderer(renderData.stl());
-            // Note: Visibility will be set later when data is loaded
-        }
-
-        if (boundaryDetector_) {
-            boundaryDetector_->initializeRenderer(renderData.boundary());
-        }
-
-        if (uniformSlicer_) {
-            uniformSlicer_->initializeRenderer(renderData.slicing());
-        }
-
-        if (trajectoryGenerator_) {
-            trajectoryGenerator_->initializeRenderer(renderData.trajectory());
-        }
-
-        if (trajectoryConnector_) {
-            trajectoryConnector_->initializeRenderer(renderData.connection());
-        }
-
-
-        return true;
-    }
-
-    bool BurTrajPlan::draw(const GeneralData& generalData, RenderData& renderData)
-    {
-        // Render data from STL processing module
-        bool result = true;
-
-        // Draw original data (STL model)
-        if (stlProcessor_ && STLProcessor::hasValidData(generalData.modelDataManager_) && renderData.stl().isVisible) {
-            result &= stlProcessor_->draw(renderData.stl(), generalData.modelDataManager_);
-        }
-
-        // Draw boundary lines (different colors)
-        if (boundaryDetector_ && BoundaryDetector::hasRenderableData(generalData.boundaryData_) && renderData.boundary().isVisible) {
-            result &= boundaryDetector_->draw(renderData.boundary(), generalData.boundaryData_);
-        }
-
-        // Offset boundary visibility syncs with original boundary: only show when both are enabled
-        if (boundaryDetector_ && BoundaryDetector::hasRenderableData(generalData.boundaryData_) &&
-            renderData.boundary().isVisible && renderData.boundary().isOffsetVisible) {
-            boundaryDetector_->drawOffsetBoundaries(renderData.boundary(), generalData.boundaryData_);
-        }
-
-        // Draw trajectory point models (if exists and visible) - use passed data
-        if (!generalData.trajData_.trajectoryPoints_.empty() && renderData.trajectory().isVisible) {
-            // [REFACTOR] Use TrajectoryGenerator::draw instead of prepareTrajectoryRenderFromData
-            if (trajectoryGenerator_ && renderData.trajectory().trajectoryModel) {
-                // Call TrajectoryGenerator to handle rendering update
-                trajectoryGenerator_->draw(renderData.trajectory(), generalData.trajData_.trajectoryPoints_, 30.0f);
-                result = true;
-            }
-        }
-
-        // Draw cutting planes
-        if (!generalData.slicingData_.cuttingPlanes_.empty() && renderData.slicing().isVisible) {
-            uniformSlicer_->draw(renderData.slicing(), generalData.slicingData_);
-            result = true;
-        }
-
-        // Draw trajectory connection lines (green=intra-trajectory, orange=inter-trajectory)
-        if (trajectoryConnector_ && TrajectoryConnector::hasRenderableData(generalData.trajData_) && renderData.connection().isVisible) {
-            bool connectionDrawn = TrajectoryConnector::draw(renderData.connection(), generalData.trajData_);
-            if (connectionDrawn) {
-                result = true;
-            }
-        }
-
-        return true;
-    }
-
-    // === Convenience interface implementation ===
-
 
     // === Statistics implementation ===
     void BurTrajPlan::getTotalPointCount(const GeneralData& generalData, size_t& count) const
@@ -382,7 +303,7 @@ namespace ModelTrajPlan
     {
         std::lock_guard<std::mutex> lock(mutex_);
         count = 0;
-        // ͳ��ProcessingInput�еĴ�ͳmesh_triangles�����ڵ������ݣ�
+        // Count mesh triangle facets in ProcessingInput
         for (const auto& data : generalData.originalData_) {
             count += data.m_indices.size();
         }
@@ -397,8 +318,6 @@ namespace ModelTrajPlan
         }
     }
 
-
-
     void BurTrajPlan::getTrajectoryPointCount(const GeneralData& generalData, size_t& count) const
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -407,62 +326,25 @@ namespace ModelTrajPlan
 
     // === Internal helper methods implementation ===
 
-
-    // === Visibility control implementation (receives RenderData as parameter) ===
-    void BurTrajPlan::setOriginalDataVisibility(RenderData& renderData, bool visible)
-    {
-        // Set STL data visibility (via RenderData)
-        if (stlProcessor_) {
-            stlProcessor_->setVisibility(renderData.stl(), visible);
-        }
-    }
-
-
-
-    void BurTrajPlan::setTrajectoryVisibility(RenderData& renderData, bool visible)
-    {
-        renderData.trajectory().isVisible = visible;
-    }
-
-    void BurTrajPlan::setCuttingPlanesVisibility(RenderData& renderData, bool visible)
-    {
-        renderData.slicing().isVisible = visible;
-    }
-
-    void BurTrajPlan::setBoundaryVisibility(RenderData& renderData, bool visible)
-    {
-        if (boundaryDetector_) {
-            boundaryDetector_->setBoundaryVisibility(renderData.boundary(), visible);
-        }
-    }
-
-    void BurTrajPlan::setOffsetBoundaryVisibility(RenderData& renderData, bool visible)
-    {
-        if (boundaryDetector_) {
-            boundaryDetector_->setOffsetBoundaryVisibility(renderData.boundary(), visible);
-        }
-    }
-
-
-
     void BurTrajPlan::clearCuttingPlanes(GeneralData& generalData)
     {
-        // [ALGORITHM] Clear cutting planes while preserving STL and boundary state
-        // Input: generalData.processingState_ - current state
+        // [ALGORITHM] Clear cutting planes while preserving STL and boundary feature state
+        // Input: generalData.processingState_ - current processing stage state
         // Output: generalData.slicingData_.cuttingPlanes_ - cleared
-        //         generalData.processingState_.isSlicingCompleted - set to false
+        //         generalData.processingState_.isSlicingCompleted - reset to false
 
-        // Save important state flags
+        // Temporarily store stage flags that need to be preserved
         bool savedSTLProcessed = generalData.processingState_.isSTLProcessed;
         bool savedBoundaryDetected = generalData.processingState_.isBoundaryDetected;
 
-        // Clear data
+        // Clear slicing and generated trajectory data
         generalData.slicingData_.cuttingPlanes_.clear();
         generalData.slicingData_.slicingLocations_.clear();
-        generalData.slicingData_.sliceLines_.clear();  // �������������Ƭ�߽���
+        generalData.slicingData_.sliceLines_.clear();            // Clear slicing boundary lines
         generalData.trajData_.trajectoryPoints_.clear();
-        generalData.trajData_.sampledBoundaryPoints_.clear();  // ���������������������
-        // A new slice set invalidates the connected path as well.  Leaving
+        generalData.trajData_.sampledBoundaryPoints_.clear();    // Clear sampled boundary points
+        
+        // A new slice set invalidates the connected cross-layer path as well. Leaving
         // this cache populated makes a second confirmation display/export the
         // previous trajectory even though its cutting planes were replaced.
         generalData.trajData_.connectionData_.connectedTrajectory_.clear();
@@ -473,7 +355,7 @@ namespace ModelTrajPlan
             boundaryDetector_->clearOffsetBoundaries(generalData.boundaryData_);
         }
 
-        // Restore preserved states, only reset slicing state
+        // Restore model and boundary states, only reset slicing and subsequent states
         generalData.processingState_.isSTLProcessed = savedSTLProcessed;
         generalData.processingState_.isBoundaryDetected = savedBoundaryDetected;
         generalData.processingState_.isSlicingCompleted = false;
@@ -481,7 +363,7 @@ namespace ModelTrajPlan
         generalData.processingState_.isTrajectoryConnected = false;
     }
 
-    // [Addition] Update size of a single cutting plane
+    // [Addition] Update geometric bounding size of a single cutting plane
     bool BurTrajPlan::updateSingleCuttingPlaneSize(GeneralData& generalData, int layerIndex)
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -494,7 +376,7 @@ namespace ModelTrajPlan
             return false;
         }
 
-        // If a previously selected layer exists and is different from current layer, deselect it
+        // If a previously selected layer exists and is different from current layer, deselect it first
         int& lastSelected = generalData.slicingData_.lastSelectedLayerIndex;
         if (lastSelected != -1 &&
             lastSelected != layerIndex &&
@@ -506,52 +388,46 @@ namespace ModelTrajPlan
         CuttingPlane& plane = generalData.slicingData_.cuttingPlanes_[layerIndex];
         plane.isSelected = 1;
 
-        // Update record
+        // Update record index
         lastSelected = layerIndex;
 
-        // [Fix] plane.center is already the original center (without translation), use directly
+        // [Fix] plane.center is already the original center without translation, use directly
         Eigen::Vector3d originalCenter = plane.center;
 
         // Prepare ModelData
         ModelData tempModelData;
         tempModelData.mainModelData_ = generalData.modelDataManager_.mainModelData_;
 
-        // Call UniformSlicer static method to update size
-        return UniformSlicer::updateSingleCuttingPlaneSize(plane, tempModelData, originalCenter, generalData.slicingData_.slicingisupdata);
+        // Rebuild the base quad, then re-intersect the transformed plane so
+        // the persistent contour and the view overlay describe the same cut.
+        if (!UniformSlicer::updateSingleCuttingPlaneSize(
+                plane, tempModelData, originalCenter, generalData.slicingData_.slicingisupdata)) {
+            return false;
+        }
+        return UniformSlicer::convertToCuttingPlanes(
+            generalData.slicingData_.currentSliceResult_,
+            &generalData.slicingData_.cuttingPlanes_, &tempModelData);
     }
-
-
 
     // === Custom Z position set/get ===
     bool BurTrajPlan::setCustomZPositions(GeneralData& generalData, const std::vector<double>& zPositions)
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        // [ALGORITHM] Store custom Z positions in generalData
+        // [ALGORITHM] Store custom Z coordinates in generalData only
         generalData.slicingData_.managedParams_.customZPositions = zPositions;
         return true;
     }
 
     void BurTrajPlan::getCustomZPositions(const GeneralData& generalData, std::vector<double>& zPositions) const
     {
-        // [QUERY] Read custom Z positions from generalData
+        // [QUERY] Read configured custom Z coordinate list from generalData
         zPositions = generalData.slicingData_.managedParams_.customZPositions;
     }
 
-    void BurTrajPlan::setKeepOriginalVisibleAfterPreprocess(bool keep)
-    {
-        // Note: This is a UI preference, could be moved to GeneralData
-        // For now, we keep it simple
-        std::lock_guard<std::mutex> lock(mutex_);
-        // Store in a temporary location or pass through parameters
-    }
-
-
-
-    // === Trajectory generation interface implementation ===
+    // === Trajectory generation core interface implementation ===
     bool BurTrajPlan::generateMATLABTrajectory(GeneralData& generalData, int size_n,
         double z1Offset, double z2Offset,
-        double offsetDistance,
-        PublicData::TrajData& publicTrajData
+        double offsetDistance
     )
     {
         // A regenerated sampling matrix invalidates every old cross-layer
@@ -563,12 +439,10 @@ namespace ModelTrajPlan
         generalData.trajData_.connectionData_.connectionSegments_.clear();
         generalData.trajData_.connectionData_.isConnected_ = false;
 
-        //
-        //
         if (generalData.slicingData_.slicingisupdata)
         {
             // [Modified] convertToCuttingPlanes now only updates sliceResult.internalBoundaries
-            // If transforms exist, it re-intersects transformed cutting planes with STL and uses traceContoursFromIntersections to build boundary lines
+            // If transforms exist, it re-intersects transformed cutting planes with STL and rebuilds boundary lines
             if (!UniformSlicer::convertToCuttingPlanes(
                 generalData.slicingData_.currentSliceResult_,
                 &generalData.slicingData_.cuttingPlanes_,
@@ -577,25 +451,23 @@ namespace ModelTrajPlan
             }
 
             // [Critical Fix] Store updated sliceResult again to ensure trajectory generation uses latest intersection data
-            // sliceResult.internalBoundaries has been updated by convertToCuttingPlanes
             updateSlicingState(generalData, generalData.slicingData_.currentSliceResult_);
         }
-        //
-        //
+
         try {
-            // 1. Check preconditions
+            // 1. Check prerequisite dependency states
             if (!stlProcessor_ || !boundaryDetector_) {
                 return false;
             }
 
-            if (!isBoundaryDetected(generalData)) {
+            if (!isBoundaryDetected(generalData) &&
+                !generalData.slicingData_.currentSliceResult_.isBoundarylessFallback) {
                 return false;
             }
 
             if (generalData.slicingData_.cuttingPlanes_.empty()) {
                 return false;
             }
-
 
             // 2. [Refactor] Prepare trajectory generation parameters - use new TrajectoryGenerationParams
             // [Fix] Read velocity parameters from generalData instead of hardcoded values
@@ -606,26 +478,23 @@ namespace ModelTrajPlan
             trajParams.z2Offset = z2Offset;
             trajParams.offsetDistance = offsetDistance;
 
-            // normalVelocity and transitionVelocity should already be set via setnormalVelocity_ and settransitionVelocity_
-            // Use defaults if not set
+            // Use safe defaults if velocities are not set
             if (trajParams.normalVelocity == 0.0) {
-                trajParams.normalVelocity = 50.0;       // Default normal trajectory speed
+                trajParams.normalVelocity = 50.0;       // Default normal working trajectory speed
             }
             if (trajParams.transitionVelocity == 0.0) {
                 trajParams.transitionVelocity = 50.0;   // Default transition speed
             }
 
-            // Save parameters to generalData (no longer includes slicing parameters)
+            // Save parameter structure to generalData
             generalData.trajData_.generationParams_ = trajParams;
 
-            // 3. Call TrajectoryGenerator - using the new interface. Boundary
-            // empty-run layers are derived there from adjacent sampled slices,
-            // not by applying a global-Z boundary shift.
+            // 3. Call TrajectoryGenerator to generate trajectory
             if (!trajectoryGenerator_) {
                 trajectoryGenerator_ = new TrajectoryGenerator();
             }
 
-            // Prepare required data - [Key] use only original boundaries
+            // Prepare upper/lower boundaries and slicing intersection segments
             const BoundaryLine& upperBoundary = generalData.boundaryData_.upperBoundary_;
             const BoundaryLine& lowerBoundary = generalData.boundaryData_.lowerBoundary_;
             const SliceResult& sliceResult = generalData.slicingData_.currentSliceResult_;
@@ -634,7 +503,7 @@ namespace ModelTrajPlan
                 return false;
             }
 
-            // Prepare model data
+            // Prepare mesh data
             ModelData tempModelData;
             const ModelData* modelData = nullptr;
             if (stlProcessor_ && STLProcessor::hasValidData(generalData.modelDataManager_)) {
@@ -642,10 +511,7 @@ namespace ModelTrajPlan
                 modelData = &tempModelData;
             }
 
-            // [Core] Use new interface: explicit input/output and return results via reference parameters
-            // Input: upperBoundary, lowerBoundary, sliceResult, trajParams, modelData
-            // Output: generalData.trajData_.referenceLines_, trajectoryPoints_, groupInfo_
-            // [Addition] Also pass boundaryData, slicingData, and trajData to place sliceLines_ into boundaryLines_ and store sampled points
+            // [Core] Call trajectory generation interface
             if (!trajectoryGenerator_->generateMATLABTrajectory(
                 upperBoundary, lowerBoundary,
                 sliceResult, trajParams, modelData,
@@ -653,8 +519,7 @@ namespace ModelTrajPlan
                 generalData.trajData_.groupInfo_,
                 generalData.boundaryData_,
                 generalData.slicingData_,
-                generalData.trajData_,
-                publicTrajData)) {
+                generalData.trajData_)) {
                 return false;
             }
 
@@ -662,10 +527,7 @@ namespace ModelTrajPlan
                 return false;
             }
 
-            // Preserve the existing bow-path topology after a phase-only
-            // resample. TrajectoryGenerator keeps even columns bottom-to-top
-            // and odd columns top-to-bottom; the connector rebuilds the same
-            // cap-to-cap / bottom-to-bottom links from that ordering.
+            // If previously connected, automatically rebuild bow path using the new point matrix
             if (rebuildBowPath) {
                 const auto groupedTrajectories =
                     TrajectoryConnector::convertTrajectoryPointsToGroupedFormat(
@@ -679,12 +541,11 @@ namespace ModelTrajPlan
                 }
             }
 
-            // 6. Update state
+            // 6. Update state flags
             generalData.processingState_.isTrajectoryGenerated = true;
             generalData.currentState_ = DataState::TrajectoryGenerated;
 
             return true;
-
         }
         catch (const std::exception& e) {
             return false;
@@ -693,31 +554,31 @@ namespace ModelTrajPlan
 
     bool BurTrajPlan::exportTrajectoryToFile(const GeneralData& generalData, const std::string& filename) const
     {
-        // [REFACTOR] Directly call TrajectoryExporter module
+        // [REFACTOR] Directly call TrajectoryExporter to export generic file
         return TrajectoryExporter::exportTrajectoryToFile(generalData.trajData_.trajectoryPoints_, filename);
     }
 
     bool BurTrajPlan::exportFANUCProgram(const GeneralData& generalData, const std::string& filename) const
     {
-        // [REFACTOR] Directly call TrajectoryExporter module
+        // [REFACTOR] Export FANUC robot machining program
         return TrajectoryExporter::exportFANUCProgram(generalData.trajData_.trajectoryPoints_, filename);
     }
 
     bool BurTrajPlan::exportABBProgram(const GeneralData& generalData, const std::string& txtFilename, const std::string& modFilename) const
     {
-        // [REFACTOR] Directly call TrajectoryExporter module
+        // [REFACTOR] Export ABB robot machining program (.mod / .txt)
         return TrajectoryExporter::exportABBProgram(generalData.trajData_.trajectoryPoints_, txtFilename, modFilename);
     }
 
     bool BurTrajPlan::exportToExcel(const GeneralData& generalData, const std::string& filename) const
     {
-        // [REFACTOR] Directly call TrajectoryExporter module
+        // [REFACTOR] Export standard Excel format
         return TrajectoryExporter::exportToExcel(generalData.trajData_.trajectoryPoints_, filename);
     }
 
     bool BurTrajPlan::exportToExcelWithVelocity(const GeneralData& generalData, const std::string& filename) const
     {
-        // [NEW] Export complete trajectory data including position, orientation, velocity, acceleration, timestamp
+        // [NEW] Export complete trajectory data report including position, orientation, velocity, acceleration, and timestamp
         return TrajectoryExporter::exportToExcelWithVelocity(generalData.trajData_.trajectoryPoints_, filename);
     }
 
@@ -726,10 +587,10 @@ namespace ModelTrajPlan
         return trajectoryGenerator_;
     }
 
-    // === Trajectory connection functionality implementation ===
+    // === Trajectory path connection functionality implementation ===
 
-    // Connect trajectory points to generate complete path
-    // strategy options: Sequential, Optimized, ZigZag, LayerByLayer
+    // Connect discrete trajectory points to generate continuous tool path
+    // strategy: Sequential, Optimized, ZigZag, LayerByLayer, BowPath, etc.
     bool BurTrajPlan::connectTrajectoryPoints(GeneralData& generalData, ConnectionStrategy strategy)
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -742,29 +603,28 @@ namespace ModelTrajPlan
             return false;
         }
 
-        // Clear old connection data first to avoid accumulation
+        // Clear old connection data first to avoid accumulation and pollution
         generalData.trajData_.connectionData_.connectedTrajectory_.clear();
         generalData.trajData_.connectionData_.connectionSegments_.clear();
         generalData.trajData_.connectionData_.isConnected_ = false;
 
-        // Clear offset boundary data, no longer needed after trajectory connection
+        // Clear offset boundary data (no longer needed after trajectory connection)
         if (boundaryDetector_) {
             boundaryDetector_->clearOffsetBoundaries(generalData.boundaryData_);
         }
 
-        // [REFACTOR] Call TrajectoryConnector static method for connection
-
-        // 1. Convert trajectory points to grouped format
+        // [REFACTOR] Call TrajectoryConnector static method to execute path concatenation
+        // 1. Convert discrete trajectory points into layered/grouped format
         std::vector<std::vector<TrajectoryPoint>> groupedTrajectories;
 
-        // ������ʹ�������ݡ���� sampledBoundaryPoints_ ���ڣ�ʹ���������� trajectoryPoints_
+        // Prefer using sampled boundary points for grouping; if sampledBoundaryPoints_ exists, group by it
         if (!generalData.trajData_.sampledBoundaryPoints_.empty()) {
             groupedTrajectories = TrajectoryConnector::convertTrajectoryPointsToGroupedFormat(
                 generalData.trajData_.trajectoryPoints_,
                 generalData.trajData_.sampledBoundaryPoints_);
         }
         else {
-            // �����û��������Ҳû�о����ݣ��޷�����
+            // Unable to safely connect if neither grouped data nor valid boundary reference exists
             return false;
         }
 
@@ -772,64 +632,47 @@ namespace ModelTrajPlan
             return false;
         }
 
-        // 2. Execute connection (static method, all data through parameters)
+        // 2. Execute path connection algorithm
         bool success = TrajectoryConnector::connectTrajectoryPoints(
-            groupedTrajectories,           // Input: grouped trajectories
+            groupedTrajectories,           // Input: grouped trajectory point matrices
             strategy,                      // Input: connection strategy
-            generalData.trajData_          // Output: connection result
+            generalData.trajData_          // Output: receive connected complete trajectory data
         );
 
         return success;
     }
 
-
-
-    // Control connection line visibility, supports adjustable line width and different colors
-    bool BurTrajPlan::setConnectionVisibility(RenderData& renderData, bool visible)
-    {
-        TrajectoryConnector::setConnectionVisibility(renderData.connection(), visible);
-        return true;
-    }
-
-
-
     bool BurTrajPlan::exportConnectedTrajectory(const GeneralData& generalData, const std::string& filename) const
     {
         std::lock_guard<std::mutex> lock(mutex_);
-
-        // Directly use trajectory data from GeneralData for export
+        // Directly use complete connected trajectory points from GeneralData for export
         return TrajectoryExporter::exportTrajectoryToFile(generalData.trajData_.trajectoryPoints_, filename);
     }
 
-
-
-    // [ALGORITHM] Execute boundary detection
-    // Input: generalData.modelDataManager_.mainModelData_ - STL model
-    //        numTrajectories - number of boundary points to generate
-    // Output: generalData.boundaryData_ - upper/lower boundaries
-    //         generalData.processingState_.isBoundaryDetected - state flag
-    bool BurTrajPlan::runBoundaryDetection(GeneralData& generalData, RenderData* renderData)
+    // [ALGORITHM] Execute boundary feature detection
+    // Input: generalData.modelDataManager_.mainModelData_ - STL mesh
+    // Output: generalData.boundaryData_ - detected upper and lower open boundaries
+    //         generalData.processingState_.isBoundaryDetected - set to true
+    bool BurTrajPlan::runBoundaryDetection(GeneralData& generalData)
     {
-        // Ensure STL is processed and detector is available
+        // Ensure STL is processed and detector instance is available
         if (!generalData.processingState_.isSTLProcessed || !boundaryDetector_) {
             return false;
         }
 
         const PrivateModel& modelData = generalData.modelDataManager_.mainModelData_;
 
-        // Execute boundary detection algorithm
         ModelData tempModelData;
         tempModelData.mainModelData_ = modelData;
 
         if (!boundaryDetector_->detectBoundaries(
             tempModelData,
             generalData.boundaryData_,
-            generalData.boundaryData_.intersectionPoints_,
-            renderData->boundary().intersectionPointsData_)) {
+            generalData.boundaryData_.intersectionPoints_)) {
             return false;
         }
 
-        // [KEY] Set state flag to indicate boundary detection is complete
+        // [KEY] Mark boundary detection as successfully completed
         generalData.processingState_.isBoundaryDetected = true;
 
         return true;
@@ -839,10 +682,9 @@ namespace ModelTrajPlan
     void BurTrajPlan::convertSliceDataToCuttingPlanes(GeneralData& generalData)
     {
         // Note: This method is deprecated as sliceResult is now passed directly
-        // Slice result should be stored in generalData if needed
     }
 
-    // === Getter function implementation from interface ===
+    // === Getter interface implementation ===
     void BurTrajPlan::getFilePaths(const GeneralData& generalData, std::vector<std::string>& filePaths) const
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -867,185 +709,108 @@ namespace ModelTrajPlan
         planes = generalData.slicingData_.cuttingPlanes_;
     }
 
-    // === Missing interface implementation ===
-
-
-
-    bool BurTrajPlan::needsRenderUpdate(const RenderData& renderData) const
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return renderData.stl().needsUpdate ||
-            renderData.boundary().needsUpdate ||
-            renderData.slicing().needsUpdate ||
-            renderData.trajectory().needsUpdate ||
-            renderData.connection().needsUpdate;
-    }
-
-    bool BurTrajPlan::hasRenderableData(const GeneralData& generalData, const RenderData& renderData) const
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-
-        // Check if original data exists and is visible
-        if (renderData.stl().isVisible) {
-            if (stlProcessor_ && STLProcessor::hasValidData(generalData.modelDataManager_)) {
-                return true;
-            }
-            if (!generalData.originalData_.empty()) {
-                return true;
-            }
-        }
-
-        // Check if trajectory data exists and is visible
-        if (renderData.trajectory().isVisible && !generalData.trajData_.trajectoryPoints_.empty()) {
-            return true;
-        }
-
-        // Check if cutting plane data exists and is visible
-        if (renderData.slicing().isVisible && !generalData.slicingData_.cuttingPlanes_.empty()) {
-            return true;
-        }
-
-        // Check if connection line data exists and is visible (independent of trajectory point visibility)
-        if (trajectoryConnector_ && TrajectoryConnector::hasRenderableData(generalData.trajData_) && renderData.connection().isVisible) {
-            return true;
-        }
-
-        return false;
-    }
-
-    // === Parameter management interface implementation ===
+    // === Parameter configuration and query interface implementation ===
     bool BurTrajPlan::setSlicingSize(GeneralData& generalData, int size)
     {
         std::lock_guard<std::mutex> lock(mutex_);
-
-        // [ALGORITHM] Store parameter in generalData only
-        // Input: size - slicing size value
-        // Output: generalData.slicingData_.managedParams_.numTrajectories
+        // [ALGORITHM] Store layer count in generalData only
         generalData.slicingData_.managedParams_.numTrajectories = size;
-
         return true;
     }
 
     void BurTrajPlan::getSlicingSize(const GeneralData& generalData, int& size) const
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        // [REFACTOR] Get from GeneralData first
         size = generalData.slicingData_.managedParams_.numTrajectories;
     }
 
     bool BurTrajPlan::setZ1Offset(GeneralData& generalData, double offset)
     {
         std::lock_guard<std::mutex> lock(mutex_);
-
-        // [Refactor] Store into TrajectoryGenerationParams
         generalData.trajData_.generationParams_.z1Offset = offset;
-
         return true;
     }
 
     void BurTrajPlan::getZ1Offset(const GeneralData& generalData, double& offset) const
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        // [Refactor] Read from TrajectoryGenerationParams
         offset = generalData.trajData_.generationParams_.z1Offset;
     }
 
     bool BurTrajPlan::setZ2Offset(GeneralData& generalData, double offset)
     {
         std::lock_guard<std::mutex> lock(mutex_);
-
-        // [Refactor] Store into TrajectoryGenerationParams
         generalData.trajData_.generationParams_.z2Offset = offset;
-
         return true;
     }
 
     void BurTrajPlan::getZ2Offset(const GeneralData& generalData, double& offset) const
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        // [Refactor] Read from TrajectoryGenerationParams
         offset = generalData.trajData_.generationParams_.z2Offset;
     }
 
     bool BurTrajPlan::setOffsetDistance(GeneralData& generalData, double distance)
     {
         std::lock_guard<std::mutex> lock(mutex_);
-
-        // [Refactor] Store into TrajectoryGenerationParams
         generalData.trajData_.generationParams_.offsetDistance = distance;
-
         return true;
     }
 
     void BurTrajPlan::getOffsetDistance(const GeneralData& generalData, double& distance) const
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        // [Refactor] Read from TrajectoryGenerationParams
         distance = generalData.trajData_.generationParams_.offsetDistance;
     }
-
 
     bool BurTrajPlan::setnormalVelocity_(GeneralData& generalData, double Velocity)
     {
         std::lock_guard<std::mutex> lock(mutex_);
-
         // [Fix] Correctly set normalVelocity (previously offsetDistance was set by mistake)
         generalData.trajData_.generationParams_.normalVelocity = Velocity;
-
         return true;
     }
 
     void BurTrajPlan::getnormalVelocity_(const GeneralData& generalData, double& Velocity) const
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        // [Fix] Correctly read normalVelocity (previously offsetDistance was read by mistake)
+        // [Fix] Correctly read normalVelocity
         Velocity = generalData.trajData_.generationParams_.normalVelocity;
     }
-
 
     bool BurTrajPlan::settransitionVelocity_(GeneralData& generalData, double Velocity)
     {
         std::lock_guard<std::mutex> lock(mutex_);
-
-        // [Fix] Correctly set transitionVelocity (previously offsetDistance was set by mistake)
+        // [Fix] Correctly set transitionVelocity
         generalData.trajData_.generationParams_.transitionVelocity = Velocity;
-
         return true;
     }
 
     void BurTrajPlan::gettransitionVelocity_(const GeneralData& generalData, double& Velocity) const
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        // ���޸�����ȷ��ȡ transitionVelocity��֮ǰ����ض�ȡ�� offsetDistance��
+        // [Fix] Correctly read transitionVelocity (previously offsetDistance was read by mistake)
         Velocity = generalData.trajData_.generationParams_.transitionVelocity;
     }
-
-
-
-
 
     // === Preset parameter implementation ===
     bool BurTrajPlan::applyCoarsePreset(GeneralData& generalData)
     {
         std::lock_guard<std::mutex> lock(mutex_);
-
-        // [ALGORITHM] Apply coarse preset to generalData only
+        // Apply coarse machining preset parameters
         generalData.slicingData_.managedParams_.applyCoarse();
-
         return true;
     }
 
-    // === STL processing state interface implementation ===
+    // === Model and processing state query interface ===
     bool BurTrajPlan::isSTLProcessed(const GeneralData& generalData) const
     {
-        // [QUERY] Read state from generalData, not from internal member
         return generalData.processingState_.isSTLProcessed;
     }
 
     bool BurTrajPlan::isBoundaryDetected(const GeneralData& generalData) const
     {
-        // [QUERY] Read state from generalData, not from internal member
         return generalData.processingState_.isBoundaryDetected;
     }
 
-}
+} // namespace ModelTrajPlan
