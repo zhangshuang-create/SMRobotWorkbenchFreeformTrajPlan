@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <iostream>
+#include "CoplanarContourChecks.h"
 
 namespace
 {
@@ -20,7 +21,7 @@ namespace
     }
 }
 
-int main()
+int main(int argc, char** argv)
 {
     const ModelTrajPlan::ModelData model = makeClosedBox();
     ModelTrajPlan::UniformSlicer slicer;
@@ -70,6 +71,18 @@ int main()
         std::abs(locations.back().point.z() - 4.5) > 1.0e-12) {
         std::cerr << "Parallel slicing did not honor the requested slice count.\n";
         return 5;
+    }
+    try {
+        coplanar_checks::checkModel(coplanar_checks::cylinder());
+        coplanar_checks::checkCoplanarFace(model);
+        if (argc > 1) {
+            ModelTrajPlan::ModelData input;
+            coplanar_checks::require(input.loadFromFile(argv[1]), "Could not load STL regression input.");
+            coplanar_checks::checkModel(input);
+        }
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
+        return 6;
     }
     return 0;
 }

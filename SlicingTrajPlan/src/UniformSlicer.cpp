@@ -9,6 +9,8 @@
 #include <map>
 #include <limits>
 #include <iostream>
+#include <array>
+#include <tuple>
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
@@ -143,6 +145,10 @@ bool UniformSlicer::performSlicing(const ModelData& modelData,
         }
         // Generate internal boundary lines
         sliceResult.internalBoundaries = generateInternalBoundaries(modelData, params, zMin, zMax, slicingLocations);
+        if (sliceResult.internalBoundaries.size() != slicingLocations.size()) {
+            if (cuttingPlanes) cuttingPlanes->clear();
+            return false;
+        }
 
         // 閵嗘劖鏌婃晶鐐偓鎴濐洤閺嬫粏顕Ч鍌滄晸閹?cuttingPlanes閿涘奔绮?sliceResult 閻㈢喐鍨氶崺铏诡攨閻?cuttingPlanes閿涘牏鏁ゆ禍搴㈡▔缁€鐚寸礆
         if (cuttingPlanes && !sliceResult.internalBoundaries.empty()) {
@@ -283,7 +289,8 @@ std::vector<BoundaryLine> UniformSlicer::generateInternalBoundaries(
             modelData, slicingLocations[idx]);
 
         if (contours.empty()) {
-            continue;
+            // Do not shift subsequent contours onto the wrong plane indices.
+            return {};
         }
 
         boundaries.push_back(contours[0]);
@@ -297,98 +304,29 @@ bool UniformSlicer::convertToCuttingPlanes(
     const std::vector<CuttingPlane>* oldCuttingPlanes,
     const ModelData* modelData)
 {
-    if (sliceResult.internalBoundaries.empty()) {
-        return true;  // 濞屸剝婀佹潏鍦櫕閺佺増宓侀敍宀冪箲閸ョ偞鍨氶崝?
-    }
-
-    if (!modelData) {
-        return true;  // 濞屸剝婀佸Ο鈥崇€烽弫鐗堝祦閿涘本妫ゅ▔鏇㈠櫢閺傜増鐪版禍銈忕礉鏉╂柨娲栭幋鎰閿涘牅绻氶幐浣稿斧鏉堝湱鏅敍?
-    }
-
-    // 闁秴宸诲В蹇庨嚋鏉堝湱鏅仦鍌︾礉濡偓閺屻儲妲搁崥锔芥箒閸欐ɑ宕查棁鈧憰浣哥安閻?
-    for (size_t i = 0; i < sliceResult.internalBoundaries.size(); ++i) {
-        // 濡偓閺屻儲妲搁崥锔芥箒閺冄呮畱閸欐ɑ宕查崣鍌涙殶闂団偓鐟曚礁绨查悽?
-        bool hasTransformation = false;
-        double tx = 0.0, ty = 0.0, tz = 0.0;
-        double rx = 0.0, ry = 0.0, rz = 0.0;
-        Eigen::Vector3d originalCenter(0, 0, sliceResult.internalBoundaries[i].z_level);
-
-        if (oldCuttingPlanes && i < oldCuttingPlanes->size()) {
-            const auto& oldPlane = (*oldCuttingPlanes)[i];
-            tx = oldPlane.translation_x;
-            ty = oldPlane.translation_y;
-            tz = oldPlane.translation_z;
-            rx = oldPlane.rotation_x;
-            ry = oldPlane.rotation_y;
-            rz = oldPlane.rotation_z;
-
-            hasTransformation = (tx != 0.0 || ty != 0.0 || tz != 0.0 ||
-                rx != 0.0 || ry != 0.0 || rz != 0.0);
-
-            // 閼惧嘲褰囬崢鐔奉潗娑擃厼绺鹃悙?
-            originalCenter = oldPlane.center;
+    if (!oldCuttingPlanes || !modelData) return true;
+    std::vector<BoundaryLine> updated;
+    updated.reserve(oldCuttingPlanes->size());
+    for (const auto& plane : *oldCuttingPlanes) {
+        const double radians = M_PI / 180.0;
+        const Eigen::Matrix3d rotation =
+            (Eigen::AngleAxisd(plane.rotation_z * radians, Eigen::Vector3d::UnitZ()) *
+             Eigen::AngleAxisd(plane.rotation_y * radians, Eigen::Vector3d::UnitY()) *
+             Eigen::AngleAxisd(plane.rotation_x * radians, Eigen::Vector3d::UnitX())).toRotationMatrix();
+        SlicePlane transformed;
+        transformed.point = plane.center +
+            Eigen::Vector3d(plane.translation_x, plane.translation_y, plane.translation_z);
+        transformed.normal = rotation * plane.normal;
+        // Recompute even at identity: moving back must restore the original
+        // contour, not retain the last translated/rotated one.
+        auto contours = traceContoursFromIntersections(*modelData, transformed);
+        if (contours.empty()) {
+            sliceResult.internalBoundaries.clear();
+            return false;
         }
-        else if (!sliceResult.internalBoundaries[i].points.empty()) {
-            // 婵″倹鐏夊▽鈩冩箒閺冄冨瀼楠炴娊娼伴敍灞肩矤瑜版挸澧犳潏鍦櫕鐠侊紕鐣绘稉顓炵妇閻?
-            Eigen::Vector3d centerSum(0, 0, 0);
-            for (const auto& point : sliceResult.internalBoundaries[i].points) {
-                centerSum += point.position;
-            }
-            originalCenter = centerSum / static_cast<double>(sliceResult.internalBoundaries[i].points.size());
-        }
-
-        // 婵″倹鐏夐張澶婂綁閹诡澁绱濋悽銊ュ綁閹广垹鎮楅惃鍕瀼楠炴娊娼伴柌宥嗘煀濮瑰倷姘﹂獮鑸垫纯閺傛媽绔熼悾?
-        if (hasTransformation) {
-            // 鐠侊紕鐣婚崣妯诲床閸氬海娈戦崚鍥ч挬闂堛垺纭堕崥鎴﹀櫤閸滃奔鑵戣箛?
-            double rx_rad = rx * M_PI / 180.0;
-            double ry_rad = ry * M_PI / 180.0;
-            double rz_rad = rz * M_PI / 180.0;
-
-            // 閸掓稑缂撻弮瀣祮閻晠妯€
-            Eigen::Matrix3d Rx, Ry, Rz;
-            Rx << 1, 0, 0,
-                0, std::cos(rx_rad), -std::sin(rx_rad),
-                0, std::sin(rx_rad), std::cos(rx_rad);
-            Ry << std::cos(ry_rad), 0, std::sin(ry_rad),
-                0, 1, 0,
-                -std::sin(ry_rad), 0, std::cos(ry_rad);
-            Rz << std::cos(rz_rad), -std::sin(rz_rad), 0,
-                std::sin(rz_rad), std::cos(rz_rad), 0,
-                0, 0, 1;
-            Eigen::Matrix3d R = Rz * Ry * Rx;
-
-            // 閸欐ɑ宕查崥搴ｆ畱濞夋洖鎮滈柌蹇撴嫲娑擃厼绺鹃悙?
-            // Keep per-layer adaptive normal instead of forcing global +Z.
-            Eigen::Vector3d originalNormal(0, 0, 1);
-            if (oldCuttingPlanes && i < oldCuttingPlanes->size()) {
-                const Eigen::Vector3d candidate = (*oldCuttingPlanes)[i].normal;
-                if (candidate.norm() > 1e-12) {
-                    originalNormal = candidate.normalized();
-                }
-            }
-            Eigen::Vector3d transformedNormal = R * originalNormal;
-            Eigen::Vector3d transformedCenter = originalCenter + Eigen::Vector3d(tx, ty, tz);
-
-            // 娴ｈ法鏁?traceContoursFromIntersections 閻㈢喐鍨氭潏鍦櫕缁惧尅绱欓崪?generateInternalBoundaries 娑撯偓閺嶅嚖绱?
-            SlicePlane transformedPlane;
-            transformedPlane.point = transformedCenter;
-            transformedPlane.normal = transformedNormal;
-            std::vector<BoundaryLine> contours = traceContoursFromIntersections(
-                *modelData, transformedPlane);
-
-            if (!contours.empty()) {
-                // 閸欘亙绻氶悾娆愭付闂€璺ㄦ畱鏉烆喖绮ㄧ痪鍖＄礄娑撴槒鐤嗗鎿勭礆閿涘苯鎷?generateInternalBoundaries 娣囨繃瀵旀稉鈧懛?
-                auto longest_contour_it = std::max_element(contours.begin(), contours.end(),
-                    [](const BoundaryLine& a, const BoundaryLine& b) {
-                        return a.points.size() < b.points.size();
-                    });
-
-                // 閻╁瓨甯寸憰鍡欐磰 sliceResult 娑擃厼顕惔鏂跨湴閻ㄥ嫯绔熼悾灞炬殶閹?
-                sliceResult.internalBoundaries[i] = *longest_contour_it;
-            }
-        }
+        updated.push_back(std::move(contours.front()));
     }
-
+    sliceResult.internalBoundaries = std::move(updated);
     return true;
 }
 
@@ -404,218 +342,152 @@ std::vector<BoundaryLine> UniformSlicer::traceContoursFromIntersections(
     const SlicePlane& plane)
 {
     std::vector<BoundaryLine> contours;
-    const double tolerance = 1e-6;
+    constexpr double tolerance = 1e-6;
+    if (!plane.point.allFinite() || !plane.normal.allFinite() ||
+        plane.normal.norm() < tolerance) return contours;
+    const Eigen::Vector3d normal = plane.normal.normalized();
 
-    // ============================
-    // 1. Plane definition
-    // ============================
-    Eigen::Vector3d normal = plane.normal.normalized();
-    double d = normal.dot(plane.point);
-
-    // ============================
-    // 2. Intersection structure
-    // ============================
-    struct IntersectionInfo {
-        Eigen::Vector3d point;
-        size_t triangleIndex;
-        int edgeIndex;
-        Eigen::Vector3d edgeStart;
-        Eigen::Vector3d edgeEnd;
+    // Weld geometric endpoints, not triangle-edge records. A plane through
+    // a mesh ring encounters the same endpoint/segment in several triangles.
+    using Cell = std::tuple<long long, long long, long long>;
+    std::map<Cell, std::vector<size_t>> cells;
+    std::vector<Eigen::Vector3d> points;
+    const auto vertexId = [&](const Eigen::Vector3d& input) {
+        const Eigen::Vector3d point = input - normal * normal.dot(input - plane.point);
+        const long long x = static_cast<long long>(std::floor(point.x() / tolerance));
+        const long long y = static_cast<long long>(std::floor(point.y() / tolerance));
+        const long long z = static_cast<long long>(std::floor(point.z() / tolerance));
+        for (int dx = -1; dx <= 1; ++dx)
+            for (int dy = -1; dy <= 1; ++dy)
+                for (int dz = -1; dz <= 1; ++dz) {
+                    const auto found = cells.find(Cell{x + dx, y + dy, z + dz});
+                    if (found == cells.end()) continue;
+                    for (size_t id : found->second)
+                        if ((points[id] - point).norm() <= tolerance) return id;
+                }
+        const size_t id = points.size();
+        points.push_back(point);
+        cells[Cell{x, y, z}].push_back(id);
+        return id;
     };
-
-    std::vector<IntersectionInfo> intersections;
-
-    // ============================
-    // 3. Iterate triangles and compute intersections
-    // ============================
-    for (size_t triangleIndex = 0;
-        triangleIndex < STLProcessor::getTriangleCount(modelData.mainModelData_);
-        ++triangleIndex)
-    {
-        Eigen::Vector3d vertices[3];
-        STLProcessor::getTriangleVertices(modelData.mainModelData_, triangleIndex, vertices);
-
-        for (int edgeIdx = 0; edgeIdx < 3; ++edgeIdx)
-        {
-            const Eigen::Vector3d& v1 = vertices[edgeIdx];
-            const Eigen::Vector3d& v2 = vertices[(edgeIdx + 1) % 3];
-
-            double dist1 = normal.dot(v1) - d;
-            double dist2 = normal.dot(v2) - d;
-
-            // Regular intersection
-            if (dist1 * dist2 < 0.0)
-            {
-                double t = dist1 / (dist1 - dist2);
-
-                if (t >= 0.0 && t <= 1.0)
-                {
-                    IntersectionInfo info;
-                    info.point = v1 + t * (v2 - v1);
-                    info.triangleIndex = triangleIndex;
-                    info.edgeIndex = edgeIdx;
-                    info.edgeStart = v1;
-                    info.edgeEnd = v2;
-                    intersections.push_back(info);
-                }
-            }
-            // Coplanar edge case
-            else if (std::abs(dist1) < tolerance && std::abs(dist2) < tolerance)
-            {
-                IntersectionInfo info1, info2;
-
-                info1.point = v1;
-                info1.triangleIndex = triangleIndex;
-                info1.edgeIndex = edgeIdx;
-                info1.edgeStart = v1;
-                info1.edgeEnd = v2;
-
-                info2.point = v2;
-                info2.triangleIndex = triangleIndex;
-                info2.edgeIndex = edgeIdx;
-                info2.edgeStart = v1;
-                info2.edgeEnd = v2;
-
-                intersections.push_back(info1);
-                intersections.push_back(info2);
+    using Edge = std::pair<size_t, size_t>;
+    struct EdgeUse { bool crossing = false; int coplanarFaces = 0; };
+    std::map<Edge, EdgeUse> edges;
+    std::set<std::array<size_t, 3>> coplanarFaces;
+    const auto addEdge = [&](size_t a, size_t b, bool coplanar) {
+        if (a == b) return;
+        auto& use = edges[std::minmax(a, b)];
+        if (coplanar) ++use.coplanarFaces;
+        else use.crossing = true;
+    };
+    for (size_t triangle = 0;
+         triangle < STLProcessor::getTriangleCount(modelData.mainModelData_); ++triangle) {
+        Eigen::Vector3d v[3];
+        STLProcessor::getTriangleVertices(modelData.mainModelData_, triangle, v);
+        double distance[3];
+        int side[3];
+        bool finite = true;
+        for (int i = 0; i < 3; ++i) {
+            finite = finite && v[i].allFinite();
+            distance[i] = normal.dot(v[i] - plane.point);
+            side[i] = distance[i] > tolerance ? 1 : (distance[i] < -tolerance ? -1 : 0);
+        }
+        if (!finite) continue;
+        if (side[0] == 0 && side[1] == 0 && side[2] == 0) {
+            std::array<size_t, 3> ids{vertexId(v[0]), vertexId(v[1]), vertexId(v[2])};
+            auto key = ids;
+            std::sort(key.begin(), key.end());
+            if (key[0] == key[1] || key[1] == key[2] || !coplanarFaces.insert(key).second)
+                continue;
+            for (int i = 0; i < 3; ++i) addEdge(ids[i], ids[(i + 1) % 3], true);
+            continue;
+        }
+        std::vector<size_t> hits;
+        for (int i = 0; i < 3; ++i) {
+            const int j = (i + 1) % 3;
+            if (side[i] == 0) hits.push_back(vertexId(v[i]));
+            if (side[i] * side[j] < 0) {
+                const double t = distance[i] / (distance[i] - distance[j]);
+                hits.push_back(vertexId(v[i] + t * (v[j] - v[i])));
             }
         }
+        std::sort(hits.begin(), hits.end());
+        hits.erase(std::unique(hits.begin(), hits.end()), hits.end());
+        if (hits.size() == 2) addEdge(hits[0], hits[1], false);
     }
 
-    if (intersections.empty())
-        return contours;
-
-    // ============================
-    // 4. Mark used intersections
-    // ============================
-    std::vector<bool> used(intersections.size(), false);
-
-    // ============================
-    // 5. Trace closed contours
-    // ============================
-    for (size_t startIdx = 0; startIdx < intersections.size(); ++startIdx)
-    {
-        if (used[startIdx]) continue;
-
-        std::vector<Eigen::Vector3d> contourPoints;
-        size_t currentIdx = startIdx;
-        Eigen::Vector3d startPoint = intersections[startIdx].point;
-
-        while (true)
-        {
-            used[currentIdx] = true;
-            contourPoints.push_back(intersections[currentIdx].point);
-
-            size_t nextIdx = intersections.size();
-            const auto& currentInfo = intersections[currentIdx];
-
-            // Method 1: Find adjacent intersection on the same triangle
-            for (size_t i = 0; i < intersections.size(); ++i)
-            {
-                if (used[i] || i == currentIdx) continue;
-
-                if (intersections[i].triangleIndex == currentInfo.triangleIndex &&
-                    intersections[i].edgeIndex != currentInfo.edgeIndex)
-                {
-                    nextIdx = i;
-                    break;
-                }
-            }
-
-            // Method 2: Find shared edge with another triangle
-            if (nextIdx == intersections.size())
-            {
-                for (size_t i = 0; i < intersections.size(); ++i)
-                {
-                    if (used[i] || i == currentIdx) continue;
-
-                    const auto& candidate = intersections[i];
-
-                    bool sharesEdge =
-                        ((candidate.edgeStart - currentInfo.edgeStart).norm() < tolerance &&
-                            (candidate.edgeEnd - currentInfo.edgeEnd).norm() < tolerance) ||
-                        ((candidate.edgeStart - currentInfo.edgeEnd).norm() < tolerance &&
-                            (candidate.edgeEnd - currentInfo.edgeStart).norm() < tolerance);
-
-                    if (sharesEdge && candidate.triangleIndex != currentInfo.triangleIndex)
-                    {
-                        nextIdx = i;
-                        break;
-                    }
-                }
-            }
-
-            // Method 3: Fallback to nearest point
-            if (nextIdx == intersections.size())
-            {
-                double minDist = std::numeric_limits<double>::max();
-
-                for (size_t i = 0; i < intersections.size(); ++i)
-                {
-                    if (used[i] || i == currentIdx) continue;
-
-                    double dist = (intersections[i].point - currentInfo.point).norm();
-                    if (dist < minDist)
-                    {
-                        minDist = dist;
-                        nextIdx = i;
-                    }
-                }
-            }
-
-            // Termination condition: no next point found
-            if (nextIdx >= intersections.size())
-                break;
-
-            // Close loop if returning to start point
-            double distToStart = (intersections[nextIdx].point - startPoint).norm();
-            if (distToStart < tolerance && contourPoints.size() >= 2)
-            {
-                break;
-            }
-
-            currentIdx = nextIdx;
-
-            // Safety break to prevent infinite loop
-            if (contourPoints.size() > intersections.size())
-                break;
-        }
-
-        // ============================
-        // 6. Build valid BoundaryLine
-        // ============================
-        if (contourPoints.size() >= 3)
-        {
-            BoundaryLine boundary;
-            boundary.normal = normal;
-
-            // Compute contour center
-            Eigen::Vector3d center = Eigen::Vector3d::Zero();
-            for (const auto& p : contourPoints)
-                center += p;
-            center /= contourPoints.size();
-            boundary.center = center;
-
-            // Compute slice height (Z-level)
-            boundary.z_level = normal.dot(center);
-
-            // Convert to BasicPoint with angle for ordering
-            for (size_t i = 0; i < contourPoints.size(); ++i)
-            {
-                BasicPoint bp;
-                bp.position = contourPoints[i];
-                bp.index = i;
-
-                Eigen::Vector3d vec = contourPoints[i] - center;
-                bp.angle = std::atan2(vec.y(), vec.x());
-
-                boundary.points.push_back(bp);
-            }
-
-            contours.push_back(boundary);
-        }
+    std::vector<std::vector<size_t>> adjacency(points.size());
+    for (const auto& entry : edges) {
+        // Internal diagonals of a coplanar patch are not contour edges.
+        if (!entry.second.crossing && entry.second.coplanarFaces != 1) continue;
+        const auto [a, b] = entry.first;
+        adjacency[a].push_back(b);
+        adjacency[b].push_back(a);
     }
+    std::vector<bool> visited(points.size(), false);
+    for (size_t start = 0; start < points.size(); ++start) {
+        if (visited[start] || adjacency[start].empty()) continue;
+        std::vector<size_t> component{start};
+        visited[start] = true;
+        bool closed = true;
+        for (size_t i = 0; i < component.size(); ++i) {
+            const size_t id = component[i];
+            closed = closed && adjacency[id].size() == 2;
+            for (size_t next : adjacency[id]) {
+                if (!visited[next]) {
+                    visited[next] = true;
+                    component.push_back(next);
+                }
+            }
+        }
+        // Never bridge a gap with a nearest-point jump or accept A-B-B as a loop.
+        if (!closed || component.size() < 3) continue;
+        std::vector<size_t> ring;
+        size_t previous = points.size(), current = start;
+        do {
+            ring.push_back(current);
+            const auto& neighbors = adjacency[current];
+            const size_t next = neighbors[0] == previous ? neighbors[1] : neighbors[0];
+            previous = current;
+            current = next;
+        } while (current != start && ring.size() <= component.size());
+        if (current != start || ring.size() != component.size()) continue;
 
+        Eigen::Vector3d areaVector = Eigen::Vector3d::Zero();
+        Eigen::Vector3d center = Eigen::Vector3d::Zero();
+        for (size_t i = 0; i < ring.size(); ++i) {
+            center += points[ring[i]];
+            areaVector += (points[ring[i]] - points[start]).cross(
+                points[ring[(i + 1) % ring.size()]] - points[start]);
+        }
+        const double signedArea = areaVector.dot(normal);
+        if (std::abs(signedArea) <= tolerance * tolerance) continue;
+        if (signedArea < 0.0) std::reverse(ring.begin(), ring.end());
+        BoundaryLine boundary;
+        boundary.normal = normal;
+        boundary.center = center / static_cast<double>(ring.size());
+        boundary.z_level = normal.dot(boundary.center);
+        for (size_t id : ring) {
+            BasicPoint point;
+            point.position = points[id];
+            point.index = static_cast<int>(boundary.points.size());
+            const Eigen::Vector3d relative = point.position - boundary.center;
+            point.angle = std::atan2(relative.y(), relative.x());
+            boundary.points.push_back(point);
+        }
+        boundary.points.push_back(boundary.points.front()); // explicit closing segment for rendering
+        contours.push_back(std::move(boundary));
+    }
+    const auto perimeter = [](const BoundaryLine& line) {
+        double length = 0.0;
+        for (size_t i = 1; i < line.points.size(); ++i)
+            length += (line.points[i].position - line.points[i - 1].position).norm();
+        return length;
+    };
+    // This API stores one contour per plane. Choose the dominant loop
+    // consistently in both initial slicing and subsequent adjustments.
+    std::stable_sort(contours.begin(), contours.end(),
+        [&](const BoundaryLine& a, const BoundaryLine& b) { return perimeter(a) > perimeter(b); });
     return contours;
 }
 bool UniformSlicer::buildSlicePlanes(
@@ -849,69 +721,13 @@ std::vector<Eigen::Vector3d> UniformSlicer::calculateSTLIntersectionWithPlane(
     const Eigen::Vector3d& planeNormal,
     double referenceZ)
 {
-    std::vector<Eigen::Vector3d> intersectionPoints;
-    const double tolerance = 1e-6;
-    
-    // 绾喕绻氬▔鏇炴倻闁插繐缍婃稉鈧崠?
-    Eigen::Vector3d normal = planeNormal.normalized();
-    
-    // 楠炴娊娼伴弬鍦柤閿涙 璺?(p - c) = 0閿涘苯宓?n 璺?p = d
-    double d = normal.dot(planeCenter);
-
-    // 闁秴宸婚幍鈧張澶夌瑏鐟欐帒鑸伴敍灞绢梾閺屻儰绗岄獮鎶芥桨閻ㄥ嫮娴夋禍銈嗗剰閸?
-    for (size_t triangleIndex = 0; triangleIndex < STLProcessor::getTriangleCount(modelData.mainModelData_); ++triangleIndex) {
-        Eigen::Vector3d vertices[3];
-        STLProcessor::getTriangleVertices(modelData.mainModelData_, triangleIndex, vertices);
-        std::vector<Eigen::Vector3d> edgeIntersections;
-
-        // 濡偓閺屻儰绗佺憴鎺戣埌閻ㄥ嫭鐦￠弶陇绔熼弰顖氭儊娑撳骸閽╅棃銏㈡祲娴?
-        for (int i = 0; i < 3; ++i) {
-            const Eigen::Vector3d& v1 = vertices[i];
-            const Eigen::Vector3d& v2 = vertices[(i + 1) % 3];
-
-            // 鐠侊紕鐣绘い鍓佸仯閸掓澘閽╅棃銏㈡畱閺堝鎮滅捄婵堫瀲
-            double dist1 = normal.dot(v1) - d;
-            double dist2 = normal.dot(v2) - d;
-
-            // 婵″倹鐏夋潏鍦畱娑撱倓閲滄い鍓佸仯閸︺劌閽╅棃銏㈡畱娑撱倓鏅堕敍鍫㈩儊閸欒渹绗夐崥宀嬬礆
-            if ((dist1 * dist2) < 0.0) {
-                // 缁炬寧顔屾稉搴￠挬闂堛垻娴夋禍銈忕礉鐠侊紕鐣绘禍銈囧仯
-                double t = dist1 / (dist1 - dist2);
-                if (t >= 0.0 && t <= 1.0) {
-                    Eigen::Vector3d intersection = v1 + t * (v2 - v1);
-                    edgeIntersections.push_back(intersection);
-                }
-            }
-            else if (std::abs(dist1) < tolerance && std::abs(dist2) < tolerance) {
-                // 婵″倹鐏夋潏閫涚瑢楠炴娊娼伴崗閬嶆桨
-                edgeIntersections.push_back(v1);
-                edgeIntersections.push_back(v2);
-            }
-        }
-
-        // 鐏忓棙婀侀弫鍫㈡畱娴溿倗鍋ｅǎ璇插閸掓壆绮ㄩ弸婊冨灙鐞涖劋鑵?
-        for (const auto& point : edgeIntersections) {
-            intersectionPoints.push_back(point);
-        }
+    (void)referenceZ;
+    const auto contours = traceContoursFromIntersections(modelData, SlicePlane{planeCenter, planeNormal});
+    std::vector<Eigen::Vector3d> points;
+    if (!contours.empty()) {
+        for (const auto& point : contours.front().points) points.push_back(point.position);
     }
-
-    // 閸樺鍣?
-    if (intersectionPoints.size() > 1) {
-        std::sort(intersectionPoints.begin(), intersectionPoints.end(),
-            [](const Eigen::Vector3d& a, const Eigen::Vector3d& b) {
-                if (std::abs(a.x() - b.x()) > 1e-6) return a.x() < b.x();
-                if (std::abs(a.y() - b.y()) > 1e-6) return a.y() < b.y();
-                return a.z() < b.z();
-            });
-
-        auto end = std::unique(intersectionPoints.begin(), intersectionPoints.end(),
-            [](const Eigen::Vector3d& a, const Eigen::Vector3d& b) {
-                return (a - b).norm() < 1e-6;
-            });
-        intersectionPoints.erase(end, intersectionPoints.end());
-    }
-
-    return intersectionPoints;
+    return points;
 }
 
 

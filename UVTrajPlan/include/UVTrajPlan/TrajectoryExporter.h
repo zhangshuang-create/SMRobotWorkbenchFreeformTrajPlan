@@ -7,10 +7,20 @@
 
 namespace SprayTrajPlan
 {
+    struct ExportTrajectoryPoint {
+        Eigen::Vector3d position; Eigen::Quaterniond orientation;
+        double velocity{0}, acceleration{0}, time{0}, sprayDistance{0};
+        std::size_t segmentIndex{0}; bool sprayEnabled{false}; int pointType{0};
+    };
     // Trajectory export utilities
     class TrajectoryExporter
     {
     public:
+        static std::vector<ExportTrajectoryPoint> prepareExportTrajectory(
+            const std::vector<Eigen::Vector3d>& mesh_vertices,
+            const std::vector<Eigen::Vector3i>& mesh_faces,
+            const std::vector<TrajectorySegment>& trajectory,
+            double speed, double spray_distance, double arc_speed_loss_pct);
         // Export trajectory to CSV format
         static bool exportTrajectoryCSV(
             const std::string& csv_path,

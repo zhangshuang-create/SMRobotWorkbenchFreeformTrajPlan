@@ -400,6 +400,7 @@ namespace ModelTrajPlan
 
         // Rebuild the base quad, then re-intersect the transformed plane so
         // the persistent contour and the view overlay describe the same cut.
+        generalData.slicingData_.sliceLines_.clear();
         if (!UniformSlicer::updateSingleCuttingPlaneSize(
                 plane, tempModelData, originalCenter, generalData.slicingData_.slicingisupdata)) {
             return false;
@@ -441,6 +442,7 @@ namespace ModelTrajPlan
 
         if (generalData.slicingData_.slicingisupdata)
         {
+            generalData.slicingData_.sliceLines_.clear();
             // [Modified] convertToCuttingPlanes now only updates sliceResult.internalBoundaries
             // If transforms exist, it re-intersects transformed cutting planes with STL and rebuilds boundary lines
             if (!UniformSlicer::convertToCuttingPlanes(

@@ -241,20 +241,13 @@ namespace SprayTrajPlan
         return true;
     }
 
-    bool TrajectoryExporter::exportPAQTrajectory(
-        const std::string& paq_path,
+    std::vector<ExportTrajectoryPoint> TrajectoryExporter::prepareExportTrajectory(
         const std::vector<Eigen::Vector3d>& mesh_vertices,
         const std::vector<Eigen::Vector3i>& mesh_faces,
         const std::vector<TrajectorySegment>& trajectory,
-        double speed,
-        double spray_distance,
-        double arc_speed_loss_pct)
+        double speed, double spray_distance, double arc_speed_loss_pct)
     {
-        std::ofstream file(paq_path);
-        if (!file.is_open()) {
-            return false;
-        }
-
+        std::vector<ExportTrajectoryPoint> result;
         std::vector<const TrajectorySegment*> segments;
         std::vector<size_t> localIndices;
         std::vector<Eigen::Vector3d> points;
@@ -266,7 +259,7 @@ namespace SprayTrajPlan
                 points.push_back(segment.xyz[i]);
             }
         }
-        if (points.empty()) return true;
+        if (points.empty()) return {};
 
         // Mirror OptAeigenTest: face normals are observations only.  Build a
         // continuous vertex-normal field and fit it independently per path.
@@ -351,15 +344,36 @@ namespace SprayTrajPlan
             if (i > 0 && orientation.w() * previousOrientation.w() + orientation.vec().dot(previousOrientation.vec()) < 0.0)
                 orientation.coeffs() = -orientation.coeffs();
             previousOrientation = orientation;
-            file << std::fixed << std::setprecision(3)
-                 << exportPoints[i].x() << " " << exportPoints[i].y() << " " << exportPoints[i].z() << " "
-                 << std::setprecision(6) << orientation.w() << " " << orientation.x() << " " << orientation.y() << " " << orientation.z() << " "
-                 << velocities[i] << " " << accelerations[i] << " " << timestamps[i] << " " << pointTypes[i] << " " << standoffs[i] << "\n";
+            ExportTrajectoryPoint point;
+            point.position=exportPoints[i]; point.orientation=orientation;
+            point.velocity=velocities[i]; point.acceleration=accelerations[i];
+            point.time=timestamps[i]; point.sprayDistance=standoffs[i]; point.pointType=pointTypes[i];
+            point.segmentIndex=static_cast<std::size_t>(segments[i]-trajectory.data()); point.sprayEnabled=segments[i]->spray_on;
+            result.push_back(point);
         }
-
-        file.close();
-        return true;
+        return result;
     }
+
+    bool TrajectoryExporter::exportPAQTrajectory(
+        const std::string& paq_path,
+        const std::vector<Eigen::Vector3d>& mesh_vertices,
+        const std::vector<Eigen::Vector3i>& mesh_faces,
+        const std::vector<TrajectorySegment>& trajectory,
+        double speed,
+        double spray_distance,
+        double arc_speed_loss_pct)
+    {
+        std::ofstream file(paq_path);
+        if(!file.is_open()) return false;
+        for(const auto& point : prepareExportTrajectory(mesh_vertices, mesh_faces, trajectory, speed, spray_distance, arc_speed_loss_pct)) {
+            file << std::fixed << std::setprecision(3)
+                << point.position.x() << " " << point.position.y() << " " << point.position.z() << " "
+                << std::setprecision(6) << point.orientation.w() << " " << point.orientation.x() << " " << point.orientation.y() << " " << point.orientation.z() << " "
+                << point.velocity << " " << point.acceleration << " " << point.time << " " << point.pointType << " " << point.sprayDistance << "\n";
+        }
+        return bool(file);
+    }
+
 
     bool TrajectoryExporter::exportMatrixFormat(
         const std::string& matrix_path,
