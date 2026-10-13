@@ -402,7 +402,8 @@ namespace ModelTrajPlan
         // the persistent contour and the view overlay describe the same cut.
         generalData.slicingData_.sliceLines_.clear();
         if (!UniformSlicer::updateSingleCuttingPlaneSize(
-                plane, tempModelData, originalCenter, generalData.slicingData_.slicingisupdata)) {
+                plane, tempModelData, originalCenter, generalData.slicingData_.slicingisupdata,
+                generalData.slicingData_.managedParams_.trajectorySpacing)) {
             return false;
         }
         return UniformSlicer::convertToCuttingPlanes(
@@ -499,6 +500,9 @@ namespace ModelTrajPlan
             // Prepare upper/lower boundaries and slicing intersection segments
             const BoundaryLine& upperBoundary = generalData.boundaryData_.upperBoundary_;
             const BoundaryLine& lowerBoundary = generalData.boundaryData_.lowerBoundary_;
+            // Count can be edited after slicing. Z pitch remains the value
+            // used to build the existing planes, but column count is current.
+            generalData.slicingData_.currentSliceResult_.usedParams.numTrajectories = size_n;
             const SliceResult& sliceResult = generalData.slicingData_.currentSliceResult_;
 
             if (sliceResult.internalBoundaries.empty()) {

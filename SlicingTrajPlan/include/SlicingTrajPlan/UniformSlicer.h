@@ -43,7 +43,7 @@ namespace ModelTrajPlan
         static bool updateSingleCuttingPlaneSize(CuttingPlane& plane,
             const ModelData& modelData,
             const Eigen::Vector3d& originalCenter,
-            bool& updata);
+            bool& updata, double minimumDisplaySize = 1.0);
 
         bool buildSlicePlanes(
             const Epiphyseal& slicingnode,
@@ -87,7 +87,7 @@ namespace ModelTrajPlan
         // Output: vector<BoundaryLine> - traced contour lines
         static std::vector<BoundaryLine> traceContoursFromIntersections(
             const ModelData& modelData,
-            const SlicePlane& plane);
+            const SlicePlane& plane, bool allowOpen = false);
     };
 
 }

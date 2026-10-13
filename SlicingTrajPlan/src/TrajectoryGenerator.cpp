@@ -18,6 +18,71 @@
 #endif
 namespace ModelTrajPlan
 {
+    // Fallback contours have no skeleton seam. Open lines must never gain
+    // an artificial closing segment; closed rings also match their phase.
+    static std::vector<std::vector<Eigen::Vector3d>> sampleFallbackContours(
+        const std::vector<BoundaryLine>& lines, int count)
+    {
+        if (count < 2 || count > 100000 || lines.empty()) return {};
+        if (lines.size() > 10000000U / static_cast<size_t>(count)) {
+            std::cerr << "Boundaryless sampling exceeds the 10000000-point resource limit.\n";
+            return {};
+        }
+        std::vector<std::vector<Eigen::Vector3d>> columns(count);
+        for (const auto& line : lines) {
+            if (line.points.size() < 2) return {};
+            const bool closed = (line.points.front().position -
+                line.points.back().position).norm() <= 1e-6;
+            std::vector<double> lengths(line.points.size(), 0.0);
+            for (size_t i = 1; i < line.points.size(); ++i)
+                lengths[i] = lengths[i - 1] +
+                    (line.points[i].position - line.points[i - 1].position).norm();
+            const double length = lengths.back();
+            if (!std::isfinite(length) || length <= 1e-9) return {};
+            std::vector<Eigen::Vector3d> samples;
+            for (int i = 0; i < count; ++i) {
+                // Open-line samples are symmetric around the arc-length midpoint.
+                // Even counts straddle it; odd counts include it exactly.
+                const double target = length * i / (closed ? count : count - 1);
+                auto next = std::upper_bound(lengths.begin(), lengths.end(), target);
+                if (next == lengths.end()) {
+                    samples.push_back(line.points.back().position);
+                } else {
+                    const size_t j = static_cast<size_t>(next - lengths.begin());
+                    const double t = (target - lengths[j - 1]) / (lengths[j] - lengths[j - 1]);
+                    samples.push_back(line.points[j - 1].position + t *
+                        (line.points[j].position - line.points[j - 1].position));
+                }
+            }
+            int bestShift = 0;
+            bool bestReverse = false;
+            if (!columns.front().empty()) {
+                double bestCost = std::numeric_limits<double>::infinity();
+                for (int reverse = 0; reverse < 2; ++reverse) {
+                    for (int shift = 0; shift < (closed ? count : 1); ++shift) {
+                        double cost = 0.0;
+                        for (int i = 0; i < count; ++i) {
+                            const int j = closed ? (shift + (reverse ? count - i : i)) % count
+                                : (reverse ? count - 1 - i : i);
+                            cost += (samples[j] - columns[i].back()).squaredNorm();
+                        }
+                        if (cost < bestCost) {
+                            bestCost = cost;
+                            bestShift = shift;
+                            bestReverse = reverse != 0;
+                        }
+                    }
+                }
+            }
+            for (int i = 0; i < count; ++i) {
+                const int j = closed ? (bestShift + (bestReverse ? count - i : i)) % count
+                    : (bestReverse ? count - 1 - i : i);
+                columns[i].push_back(samples[j]);
+            }
+        }
+        return columns;
+    }
+
     TrajectoryGenerator::TrajectoryGenerator()
     {
         // [DESIGN] Stateless algorithm class
@@ -184,6 +249,7 @@ namespace ModelTrajPlan
 
         try {
             const bool boundarylessFallback = sliceResult.isBoundarylessFallback;
+            trajData.sampledBoundaryPoints_.clear();
             // [Addition] Place sliceLines_ into boundaryLines_ in order
             // The boundary offsets are empty-run extensions, not independent
             // Z-shifted contours.  Sample the physical contours first, then
@@ -258,13 +324,14 @@ namespace ModelTrajPlan
 
             // [Addition] Normalize all boundaries to CCW to avoid inconsistent sampling directions
             for (auto& bl : boundaryData.boundaryLines_) {
-                normalizeBoundaryCCW(bl);
+                if (!boundarylessFallback) normalizeBoundaryCCW(bl);
             }
 
             // 4. Derive the common contour sample count from spacing d.
             // Use the longest and shortest polyline lengths in the sliced contours.
             const double spacing = sliceResult.usedParams.trajectorySpacing;
-            if (!std::isfinite(spacing) || spacing <= 0.0) {
+            if (sliceResult.usedParams.numTrajectories == 0 &&
+                (!std::isfinite(spacing) || spacing <= 0.0)) {
                 std::cout << "TrajectoryGenerator: Error - invalid trajectory spacing d: " << spacing << std::endl;
                 return false;
             }
@@ -285,20 +352,39 @@ namespace ModelTrajPlan
                 return false;
             }
             int trajectoryCount = sliceResult.usedParams.numTrajectories;
-            if (trajectoryCount <= 0) {
+            if (boundarylessFallback) {
+                if (trajectoryCount == 0) {
+                    // Use a common count from the longest contour so every
+                    // layer has matching columns and no arc pitch exceeds d.
+                    double requestedCount = 2.0;
+                    for (const auto& contour : boundaryData.boundaryLines_) {
+                        double length = 0.0;
+                        for (size_t i = 1; i < contour.points.size(); ++i)
+                            length += (contour.points[i].position - contour.points[i - 1].position).norm();
+                        const bool closed = (contour.points.front().position -
+                            contour.points.back().position).norm() <= 1e-6;
+                        requestedCount = std::max(requestedCount,
+                            std::ceil(length / spacing) + (closed ? 0.0 : 1.0));
+                    }
+                    if (!std::isfinite(requestedCount) || requestedCount > 100000.0) return false;
+                    trajectoryCount = static_cast<int>(requestedCount);
+                }
+                if (trajectoryCount < 2 || trajectoryCount > 100000) return false;
+            } else if (trajectoryCount <= 0) {
                 const int longestCount = std::max(1, static_cast<int>(std::floor(longestLength / spacing)));
                 const int shortestCount = std::max(1, static_cast<int>(std::floor(shortestLength / spacing)));
                 trajectoryCount = std::max(2, (longestCount + shortestCount) / 2);
             }
             trajectoryCount = std::max(2, trajectoryCount);
-            if (trajectoryCount % 2 != 0) {
+            if (!boundarylessFallback && trajectoryCount % 2 != 0) {
                 ++trajectoryCount;
             }
 
 
             // 5. Uniformly sample the physical contours first.
-            trajData.sampledBoundaryPoints_ =
-                samplePointsFromBoundaryLines(boundaryData.boundaryLines_, trajectoryCount,
+            trajData.sampledBoundaryPoints_ = boundarylessFallback
+                ? sampleFallbackContours(boundaryData.boundaryLines_, trajectoryCount)
+                : samplePointsFromBoundaryLines(boundaryData.boundaryLines_, trajectoryCount,
                     boundarylessFallback ? std::vector<LinePoint>{} : boundaryData.phaseReferenceLine_,
                     boundarylessFallback ? Eigen::Vector3d::Zero() : boundaryData.phaseReferencePlaneNormal_);
 
@@ -347,6 +433,7 @@ namespace ModelTrajPlan
                     std::cerr << "Boundary empty-run requires a lower boundary, an adjacent slice, and an upper boundary." << std::endl;
                     return false;
                 }
+                if (!requiresEmptyRun) continue;
                 if (!requiresEmptyRun) {
                     continue;
                 }

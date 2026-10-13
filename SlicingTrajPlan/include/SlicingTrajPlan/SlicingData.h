@@ -43,10 +43,10 @@ namespace ModelTrajPlan
     using SlicingLocation = std::vector<SlicePlane>;
     // [Refactor] Slicing parameter structure - contains slicing-related parameters only, no offset parameters
     struct SlicingParams {
-        int numTrajectories = 0;       // 0 derives the count from spacing; positive values override it
-        double trajectorySpacing = 1.0; // Requested contour spacing d (mm)
+        int numTrajectories = 0;       // 0 derives a common count from contour spacing; positive counts override spacing
+        double trajectorySpacing = 1.0; // Requested contour arc-length sample spacing (mm)
         double minStep = 50.0;         // Minimum Z step used by parallel slicing (mm)
-        int maxSliceCount = 0;         // Final slice-layer limit; 0 means unlimited
+        int maxSliceCount = 0;         // Fallback: 0 derives layers from minStep; positive values specify layer count
         SlicingMode mode = SlicingMode::AA;
         std::vector<double> customZPositions;  // Custom Z slicing positions
 

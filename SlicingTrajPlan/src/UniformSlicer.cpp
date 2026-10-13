@@ -77,22 +77,25 @@ bool UniformSlicer::performSlicing(const ModelData& modelData,
             zMax = boundsMax.z();
             const double height = zMax - zMin;
             if (!std::isfinite(zMin) || !std::isfinite(zMax) || height <= 1e-9 ||
-                !std::isfinite(params.minStep) || params.minStep <= 0.0) {
+                params.maxSliceCount < 0 || (params.maxSliceCount == 0 &&
+                    (!std::isfinite(params.minStep) || params.minStep <= 0.0))) return false;
+
+            // Count overrides Z pitch. Automatic placement retains the pitch
+            // and appends the upper extremum if the final interval is shorter.
+            const double requestedCount = params.maxSliceCount > 0
+                ? params.maxSliceCount : std::ceil(height / params.minStep) + 1.0;
+            if (!std::isfinite(requestedCount) || requestedCount > 100000.0) {
+                std::cerr << "Boundaryless slicing exceeds the 100000-plane resource limit.\n";
                 return false;
             }
-
-            const int layerCount = params.maxSliceCount > 0
-                ? params.maxSliceCount
-                : std::max(2, static_cast<int>(std::floor(height / params.minStep)) + 1);
+            const int layerCount = static_cast<int>(requestedCount);
             slicingLocations.reserve(static_cast<size_t>(layerCount));
             for (int index = 0; index < layerCount; ++index) {
-                // Keep planes inside the mesh range to avoid vertex-only
-                // intersections at the two extrema.
-                const double ratio = static_cast<double>(index + 1) /
-                    static_cast<double>(layerCount + 1);
-                slicingLocations.push_back({
-                    Eigen::Vector3d(0.0, 0.0, zMin + height * ratio),
-                    Eigen::Vector3d::UnitZ() });
+                const double z = params.maxSliceCount > 0
+                    ? (layerCount == 1 ? zMin + height * 0.5
+                        : zMin + height * index / (layerCount - 1))
+                    : (index == layerCount - 1 ? zMax : zMin + index * params.minStep);
+                slicingLocations.push_back({Eigen::Vector3d(0.0, 0.0, z), Eigen::Vector3d::UnitZ()});
             }
             sliceResult.isBoundarylessFallback = true;
         }
@@ -144,7 +147,36 @@ bool UniformSlicer::performSlicing(const ModelData& modelData,
             return false;
         }
         // Generate internal boundary lines
-        sliceResult.internalBoundaries = generateInternalBoundaries(modelData, params, zMin, zMax, slicingLocations);
+        if (sliceResult.isBoundarylessFallback) {
+            for (size_t index = 0; index < slicingLocations.size(); ++index) {
+                auto query = slicingLocations[index];
+                // Display extrema exactly; sample just inside the mesh to
+                // avoid isolated vertices or a coplanar cap as the end contour.
+                if (slicingLocations.size() > 1 && (index == 0 || index + 1 == slicingLocations.size())) {
+                    const double adjacentGap = index == 0
+                        ? slicingLocations[1].point.z() - zMin
+                        : zMax - slicingLocations[index - 1].point.z();
+                    const double inset = std::min(adjacentGap * 0.01,
+                        std::max(1e-7, (zMax - zMin) * 1e-6));
+                    query.point.z() += index == 0 ? inset : -inset;
+                }
+                auto contours = traceContoursFromIntersections(modelData, query, true);
+                if (contours.empty()) {
+                    std::cerr << "Boundaryless slicing: no contour at layer " << index
+                        << "; refusing to bridge a missing layer.\n";
+                    sliceResult.internalBoundaries.clear();
+                    if (cuttingPlanes) cuttingPlanes->clear();
+                    return false;
+                }
+                if (contours.size() > 1) {
+                    std::cerr << "Boundaryless slicing: layer " << index << " ignores "
+                        << contours.size() - 1 << " shorter contour branches.\n";
+                }
+                sliceResult.internalBoundaries.push_back(std::move(contours.front()));
+            }
+        } else {
+            sliceResult.internalBoundaries = generateInternalBoundaries(modelData, params, zMin, zMax, slicingLocations);
+        }
         if (sliceResult.internalBoundaries.size() != slicingLocations.size()) {
             if (cuttingPlanes) cuttingPlanes->clear();
             return false;
@@ -212,12 +244,15 @@ bool UniformSlicer::performSlicing(const ModelData& modelData,
                     maxLocalY = 1.0;
                 }
 
-                double xRange = maxLocalX - minLocalX;
-                double yRange = maxLocalY - minLocalY;
-                if (xRange < 1e-6) xRange = 1.0;
-                if (yRange < 1e-6) yRange = 1.0;
-                double xPad = xRange * planeMargin;
-                double yPad = yRange * planeMargin;
+                const double xRange = maxLocalX - minLocalX;
+                const double yRange = maxLocalY - minLocalY;
+                const double minimumDisplaySize = std::isfinite(params.trajectorySpacing)
+                    && params.trajectorySpacing > 0.0 ? params.trajectorySpacing : 1.0;
+                // Expand symmetrically only when needed; contour geometry is unchanged.
+                const double xPad = std::max(xRange * planeMargin,
+                    (minimumDisplaySize - xRange) * 0.5);
+                const double yPad = std::max(yRange * planeMargin,
+                    (minimumDisplaySize - yRange) * 0.5);
 
                 minLocalX -= xPad;
                 maxLocalX += xPad;
@@ -317,9 +352,27 @@ bool UniformSlicer::convertToCuttingPlanes(
         transformed.point = plane.center +
             Eigen::Vector3d(plane.translation_x, plane.translation_y, plane.translation_z);
         transformed.normal = rotation * plane.normal;
+        // Rebuilding the unchanged extrema must preserve the inward query
+        // used by initial fallback slicing, including after resetting edits.
+        if (sliceResult.isBoundarylessFallback &&
+            (transformed.normal - Eigen::Vector3d::UnitZ()).norm() < 1e-9) {
+            Eigen::Vector3d low, high;
+            STLProcessor::calculateBounds(modelData->mainModelData_, low, high);
+            const double height = high.z() - low.z();
+            double gap = height;
+            for (const auto& adjacent : *oldCuttingPlanes) {
+                const double distance = std::abs(adjacent.center.z() - plane.center.z());
+                if (distance > 0.0) gap = std::min(gap, distance);
+            }
+            const double inset = std::min(gap * 0.01, std::max(1e-7, height * 1e-6));
+            if (std::abs(transformed.point.z() - low.z()) <= 1e-9)
+                transformed.point.z() = low.z() + inset;
+            else if (std::abs(transformed.point.z() - high.z()) <= 1e-9)
+                transformed.point.z() = high.z() - inset;
+        }
         // Recompute even at identity: moving back must restore the original
         // contour, not retain the last translated/rotated one.
-        auto contours = traceContoursFromIntersections(*modelData, transformed);
+        auto contours = traceContoursFromIntersections(*modelData, transformed, sliceResult.isBoundarylessFallback);
         if (contours.empty()) {
             sliceResult.internalBoundaries.clear();
             return false;
@@ -339,7 +392,7 @@ bool UniformSlicer::convertToCuttingPlanes(
 // Output: vector<BoundaryLine> - traced contour lines
 std::vector<BoundaryLine> UniformSlicer::traceContoursFromIntersections(
     const ModelData& modelData,
-    const SlicePlane& plane)
+    const SlicePlane& plane, bool allowOpen)
 {
     std::vector<BoundaryLine> contours;
     constexpr double tolerance = 1e-6;
@@ -440,18 +493,28 @@ std::vector<BoundaryLine> UniformSlicer::traceContoursFromIntersections(
                 }
             }
         }
-        // Never bridge a gap with a nearest-point jump or accept A-B-B as a loop.
-        if (!closed || component.size() < 3) continue;
+        // An open contour is a simple chain with exactly two degree-one ends.
+        // Branched graphs remain invalid; never invent nearest-point edges.
+        size_t chainStart = start;
+        int ends = 0;
+        bool simple = true;
+        for (size_t id : component) {
+            if (adjacency[id].size() == 1) { ++ends; chainStart = id; }
+            else if (adjacency[id].size() != 2) simple = false;
+        }
+        if (closed ? component.size() < 3
+            : (!allowOpen || !simple || ends != 2 || component.size() < 2)) continue;
         std::vector<size_t> ring;
-        size_t previous = points.size(), current = start;
+        size_t previous = points.size(), current = closed ? start : chainStart;
         do {
             ring.push_back(current);
             const auto& neighbors = adjacency[current];
+            if (!closed && neighbors.size() == 1 && previous != points.size()) break;
             const size_t next = neighbors[0] == previous ? neighbors[1] : neighbors[0];
             previous = current;
             current = next;
-        } while (current != start && ring.size() <= component.size());
-        if (current != start || ring.size() != component.size()) continue;
+        } while ((!closed || current != start) && ring.size() <= component.size());
+        if ((closed && current != start) || ring.size() != component.size()) continue;
 
         Eigen::Vector3d areaVector = Eigen::Vector3d::Zero();
         Eigen::Vector3d center = Eigen::Vector3d::Zero();
@@ -461,8 +524,8 @@ std::vector<BoundaryLine> UniformSlicer::traceContoursFromIntersections(
                 points[ring[(i + 1) % ring.size()]] - points[start]);
         }
         const double signedArea = areaVector.dot(normal);
-        if (std::abs(signedArea) <= tolerance * tolerance) continue;
-        if (signedArea < 0.0) std::reverse(ring.begin(), ring.end());
+        if (closed && std::abs(signedArea) <= tolerance * tolerance) continue;
+        if (closed && signedArea < 0.0) std::reverse(ring.begin(), ring.end());
         BoundaryLine boundary;
         boundary.normal = normal;
         boundary.center = center / static_cast<double>(ring.size());
@@ -475,7 +538,7 @@ std::vector<BoundaryLine> UniformSlicer::traceContoursFromIntersections(
             point.angle = std::atan2(relative.y(), relative.x());
             boundary.points.push_back(point);
         }
-        boundary.points.push_back(boundary.points.front()); // explicit closing segment for rendering
+        if (closed) boundary.points.push_back(boundary.points.front());
         contours.push_back(std::move(boundary));
     }
     const auto perimeter = [](const BoundaryLine& line) {
@@ -813,7 +876,7 @@ std::vector<Eigen::Vector3d> UniformSlicer::applyTransformationToVertices(
 bool UniformSlicer::updateSingleCuttingPlaneSize(CuttingPlane& plane, 
                                                 const ModelData& modelData,
                                                 const Eigen::Vector3d& originalCenter,
-                                                 bool& updata)
+                                                 bool& updata, double minimumDisplaySize)
 {
     // 鐠侊紕鐣婚崣妯诲床閸氬海娈戦崚鍥ч挬闂堛垺纭堕崥鎴﹀櫤閸滃奔鑵戣箛?
     double rx_rad = plane.rotation_x * M_PI / 180.0;
@@ -845,8 +908,12 @@ bool UniformSlicer::updateSingleCuttingPlaneSize(CuttingPlane& plane,
         plane.translation_x, plane.translation_y, plane.translation_z);
     
     // 閻劌褰夐幑銏犳倵閻ㄥ嫬鍨忛獮鎶芥桨娑撳洞TL濮瑰倷姘?
-    std::vector<Eigen::Vector3d> intersectionPoints = calculateSTLIntersectionWithPlane(
-        modelData, transformedCenter, transformedNormal, transformedCenter.z());
+    // Display sizing accepts open chains as well as closed rings.
+    std::vector<Eigen::Vector3d> intersectionPoints;
+    for (const auto& contour : traceContoursFromIntersections(
+            modelData, SlicePlane{transformedCenter, transformedNormal}, true)) {
+        for (const auto& point : contour.points) intersectionPoints.push_back(point.position);
+    }
     
     if (intersectionPoints.empty()) {
         return false;  // 濞屸剝婀佹禍銈囧仯閿涘奔绻氶幐浣稿斧閺堝鏄傜€?
@@ -883,6 +950,9 @@ bool UniformSlicer::updateSingleCuttingPlaneSize(CuttingPlane& plane,
     double yRange = maxLocalY - minLocalY;
     double xPad = xRange * 0.1;  // 10%鏉堢绐涢敍灞锯偓璇插彙1.2閸?
     double yPad = yRange * 0.1;
+    if (!std::isfinite(minimumDisplaySize) || minimumDisplaySize <= 0.0) minimumDisplaySize = 1.0;
+    xPad = std::max(xPad, (minimumDisplaySize - xRange) * 0.5);
+    yPad = std::max(yPad, (minimumDisplaySize - yRange) * 0.5);
     
     minLocalX -= xPad;
     maxLocalX += xPad;
