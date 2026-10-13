@@ -71,5 +71,39 @@ int main()
         std::cerr << "Automatic trajectory count did not produce valid group statistics.\n";
         return 5;
     }
+    // Deletion must update the persistent slice matrix and invalidate every
+    // dependent trajectory without changing physical model boundaries.
+    document.slicingData_.cuttingPlanes_ = planes;
+    document.slicingData_.slicingLocations_ = locations;
+    document.slicingData_.currentSliceResult_ = sliceResult;
+    document.slicingData_.sliceLines_ = sliceResult.internalBoundaries;
+    document.trajData_ = trajectoryData;
+    document.trajData_.connectionData_.isConnected_ = true;
+    document.processingState_.isTrajectoryGenerated = true;
+    document.processingState_.isTrajectoryConnected = true;
+    document.boundaryData_.lowerBoundary_.points = sliceResult.internalBoundaries.front().points;
+    const auto boundaryCount = document.boundaryData_.lowerBoundary_.points.size();
+    const auto originalCount = planes.size();
+    const double survivingZ = planes[2].center.z();
+    if (plan.deleteCuttingPlane(document, -1) || plan.deleteCuttingPlane(document, int(originalCount))) return 6;
+    if (!plan.deleteCuttingPlane(document, 1)) return 7;
+    const auto& remaining = document.slicingData_;
+    if (remaining.cuttingPlanes_.size() != originalCount - 1 ||
+        remaining.currentSliceResult_.internalBoundaries.size() != originalCount - 1 ||
+        remaining.slicingLocations_.size() != originalCount - 1 ||
+        remaining.cuttingPlanes_[1].center.z() != survivingZ ||
+        remaining.cuttingPlanes_[1].layer_index != 1 || !remaining.sliceLines_.empty() ||
+        !document.trajData_.trajectoryPoints_.empty() || !document.trajData_.sampledBoundaryPoints_.empty() ||
+        document.trajData_.connectionData_.isConnected_ || document.processingState_.isTrajectoryGenerated ||
+        document.processingState_.isTrajectoryConnected ||
+        document.boundaryData_.lowerBoundary_.points.size() != boundaryCount) return 8;
+    if (!generator.generateMATLABTrajectory({}, {}, remaining.currentSliceResult_, generationParams, &model,
+        trajectory, groupInfo, document.boundaryData_, document.slicingData_, document.trajData_)) return 9;
+    for (const auto& column : document.trajData_.sampledBoundaryPoints_)
+        if (column.size() != originalCount - 1) return 10;
+    while (!document.slicingData_.cuttingPlanes_.empty())
+        if (!plan.deleteCuttingPlane(document, int(document.slicingData_.cuttingPlanes_.size()) - 1)) return 11;
+    if (document.slicingData_.lastSelectedLayerIndex != -1 || document.processingState_.isSlicingCompleted ||
+        !document.slicingData_.currentSliceResult_.internalBoundaries.empty()) return 12;
     return 0;
 }

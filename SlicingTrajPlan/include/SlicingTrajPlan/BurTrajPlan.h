@@ -76,6 +76,7 @@ namespace ModelTrajPlan
 
         // [Addition] Update size of a single cutting plane (compute transformed intersection bounding box * 1.2)
         bool updateSingleCuttingPlaneSize(GeneralData& generalData, int layerIndex) override;
+        bool deleteCuttingPlane(GeneralData& generalData, int layerIndex);
 
         // === Trajectory generation interfaces (matching MATLAB behavior) ===
         bool generateMATLABTrajectory(GeneralData& generalData, int size_n,

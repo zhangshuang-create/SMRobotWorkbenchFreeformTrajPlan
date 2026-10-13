@@ -364,6 +364,57 @@ namespace ModelTrajPlan
     }
 
     // [Addition] Update geometric bounding size of a single cutting plane
+    bool BurTrajPlan::deleteCuttingPlane(GeneralData& generalData, int layerIndex)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto& slicing = generalData.slicingData_;
+        const size_t count = slicing.cuttingPlanes_.size();
+        if (layerIndex < 0 || static_cast<size_t>(layerIndex) >= count ||
+            slicing.currentSliceResult_.internalBoundaries.size() != count) return false;
+        const size_t index = static_cast<size_t>(layerIndex);
+        slicing.cuttingPlanes_.erase(slicing.cuttingPlanes_.begin() + index);
+        slicing.currentSliceResult_.internalBoundaries.erase(
+            slicing.currentSliceResult_.internalBoundaries.begin() + index);
+        if (slicing.slicingLocations_.size() == count)
+            slicing.slicingLocations_.erase(slicing.slicingLocations_.begin() + index);
+        else slicing.slicingLocations_.clear();
+        slicing.sliceLines_.clear();
+        slicing.managedParams_.customZPositions.clear();
+        for (const auto& line : slicing.currentSliceResult_.internalBoundaries)
+            slicing.managedParams_.customZPositions.push_back(line.z_level);
+        slicing.lastSelectedLayerIndex = slicing.cuttingPlanes_.empty() ? -1
+            : std::min(layerIndex, static_cast<int>(slicing.cuttingPlanes_.size()) - 1);
+        slicing.minZLevel_ = slicing.maxZLevel_ = 0.0;
+        if (!slicing.cuttingPlanes_.empty()) {
+            slicing.minZLevel_ = std::numeric_limits<double>::max();
+            slicing.maxZLevel_ = std::numeric_limits<double>::lowest();
+        }
+        for (size_t i = 0; i < slicing.cuttingPlanes_.size(); ++i) {
+            auto& plane = slicing.cuttingPlanes_[i];
+            plane.layer_index = static_cast<int>(i);
+            plane.isSelected = plane.layer_index == slicing.lastSelectedLayerIndex;
+            const double z = plane.center.z() + plane.translation_z;
+            slicing.minZLevel_ = std::min(slicing.minZLevel_, z);
+            slicing.maxZLevel_ = std::max(slicing.maxZLevel_, z);
+        }
+        slicing.slicingisupdata = false; // Remaining contours already reflect their transforms.
+        auto& trajectories = generalData.trajData_;
+        trajectories.trajectoryPoints_.clear();
+        trajectories.trajectoryPointsbf_.clear();
+        trajectories.trajectoryPointsaf_.clear();
+        trajectories.sampledBoundaryPoints_.clear();
+        trajectories.connectionData_ = {};
+        trajectories.groupInfo_ = {};
+        generalData.boundaryData_.boundaryLines_.clear();
+        generalData.boundaryData_.lowerBoundaryOffset_.points.clear();
+        generalData.boundaryData_.upperBoundaryOffset_.points.clear();
+        generalData.processingState_.isTrajectoryGenerated = false;
+        generalData.processingState_.isTrajectoryConnected = false;
+        generalData.processingState_.isSlicingCompleted = !slicing.cuttingPlanes_.empty();
+        generalData.currentState_ = DataState::EdgeExtracted;
+        return true;
+    }
+
     bool BurTrajPlan::updateSingleCuttingPlaneSize(GeneralData& generalData, int layerIndex)
     {
         std::lock_guard<std::mutex> lock(mutex_);
