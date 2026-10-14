@@ -98,7 +98,7 @@ namespace ModelTrajPlan
             const std::vector<Eigen::Vector3d>& cuttingPlaneCenters,
             const ModelData* modelData,
             const TrajectoryGenerationParams& trajParams,
-            std::vector<TrajectoryPoint>& trajectoryPoints) const;
+            std::vector<TrajectoryPoint>& trajectoryPoints, bool startFromUpper) const;
         static Eigen::Vector3d getPointAtLength(const std::vector<BasicPoint>& points,
             const std::vector<double>& cumLengths,
             double totalLength,

@@ -201,9 +201,23 @@ namespace ModelTrajPlan
                 cuttingPlaneCenters.push_back(center);
             }
 
+            bool startFromUpper = false;
+            if(!sliceResult.isBoundarylessFallback && !upperBoundary.points.empty() &&
+                !lowerBoundary.points.empty() && !trajData.sampledBoundaryPoints_.empty()) {
+                const auto& firstColumn = trajData.sampledBoundaryPoints_.front();
+                const size_t lowerIndex = trajParams.z1Offset != 0.0 ? 1u : 0u;
+                const size_t upperInset = trajParams.z2Offset != 0.0 ? 1u : 0u;
+                if(firstColumn.size() > lowerIndex + upperInset) {
+                    const size_t upperIndex = firstColumn.size() - 1 - upperInset;
+                    // Choose between the physical boundary points on the same
+                    // seam, without letting empty-run extensions change sides.
+                    startFromUpper = firstColumn[upperIndex].squaredNorm() <
+                        firstColumn[lowerIndex].squaredNorm();
+                }
+            }
             if (!generateTrajectoryPointsFromSampledPoints(
                     trajData.sampledBoundaryPoints_, cuttingPlaneCenters,
-                    modelData, trajParams, trajData.trajectoryPoints_)) {
+                    modelData, trajParams, trajData.trajectoryPoints_, startFromUpper)) {
                 return false;
             }
 
@@ -497,7 +511,7 @@ namespace ModelTrajPlan
         const std::vector<Eigen::Vector3d>& cuttingPlaneCenters,
         const ModelData* modelData,
         const TrajectoryGenerationParams& trajParams,
-        std::vector<TrajectoryPoint>& trajectoryPoints) const
+        std::vector<TrajectoryPoint>& trajectoryPoints, bool startFromUpper) const
     {
         trajectoryPoints.clear();
         if (sampledPoints.empty()) {
@@ -619,8 +633,9 @@ namespace ModelTrajPlan
             const std::vector<Eigen::Vector3d>& layerPoints = sampledPoints[trajectoryIndex];
             if (trajParams.previewFirstPoint && trajectoryIndex > 0) break;
 
-            // [Key] Determine whether to reverse: odd indices (1st, 3rd, 5th...) run top to bottom
-            bool reverseDirection = (trajectoryIndex % 2 == 1);
+            // Alternate traversal from the chosen initial boundary, keeping
+            // the seam column first and the remaining columns serpentine.
+            bool reverseDirection = (trajectoryIndex % 2 == 1) != startFromUpper;
 
             // Keep the sign continuous along this trajectory.  The radial
             // center test below is useful for selecting the initial side, but
@@ -631,7 +646,9 @@ namespace ModelTrajPlan
 
             for (size_t i = 0; i < layerPoints.size(); ++i) {
                 // A first offset point also needs the physical boundary pose.
-                if (trajParams.previewFirstPoint && i > (trajParams.z1Offset != 0.0 ? 1u : 0u)) break;
+                const bool hasStartOffset = reverseDirection
+                    ? trajParams.z2Offset != 0.0 : trajParams.z1Offset != 0.0;
+                if (trajParams.previewFirstPoint && i > (hasStartOffset ? 1u : 0u)) break;
                 // [Serpentine] Select point index based on direction
                 size_t pointIndex = reverseDirection ? (layerPoints.size() - 1 - i) : i;
                 const auto& point = layerPoints[pointIndex];

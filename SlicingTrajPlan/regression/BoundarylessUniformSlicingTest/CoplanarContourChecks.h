@@ -143,6 +143,30 @@ namespace coplanar_checks
         require((high - low).x() > 590.0 && (high - low).y() > 590.0,
             "Middle trajectory samples collapsed into a small contour fragment.");
         std::cout << "Trajectory check: " << groups.numTrajectories << " columns remain on the cylinder wall.\n";
+        // Boundary labels are not a distance-to-origin ordering. Reverse them
+        // so the nearest seam endpoint belongs to the supplied upper boundary.
+        require(generator.generateMATLABTrajectory(ends.internalBoundaries[0], ends.internalBoundaries[1],
+            result, generation, &model, output, groups, boundaries, slicing, trajectories),
+            "Generation with the nearest endpoint on the upper boundary failed.");
+        const auto& firstColumn = trajectories.sampledBoundaryPoints_.front();
+        require(firstColumn.back().squaredNorm() < firstColumn.front().squaredNorm(),
+            "Regression setup did not reverse boundary distances.");
+        require((output.front().pose.block<3,1>(0,3) - firstColumn.back()).norm() < 1e-6,
+            "The first seam trajectory started at the farther boundary.");
+        require((output[firstColumn.size()].pose.block<3,1>(0,3) -
+            trajectories.sampledBoundaryPoints_[1].front()).norm() < 1e-6,
+            "Changing the initial boundary broke serpentine traversal.");
+        generation.z2Offset = 7.0;
+        require(generator.generateMATLABTrajectory(ends.internalBoundaries[0], ends.internalBoundaries[1],
+            result, generation, &model, output, groups, boundaries, slicing, trajectories),
+            "Upper-boundary empty-run generation failed.");
+        const Eigen::Matrix4d firstPose = output.front().pose;
+        generation.previewFirstPoint = true;
+        require(generator.generateMATLABTrajectory(ends.internalBoundaries[0], ends.internalBoundaries[1],
+            result, generation, &model, output, groups, boundaries, slicing, trajectories),
+            "Reversed first-point preview failed.");
+        require(output.size() == 1 && (output.front().pose - firstPose).norm() < 1e-6,
+            "First-point preview disagrees with the exported initial pose.");
     }
 
 
