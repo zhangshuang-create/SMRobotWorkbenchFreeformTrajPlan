@@ -25,6 +25,23 @@ int main(int argc, char** argv)
 {
     try {
     const ModelTrajPlan::ModelData model = makeClosedBox();
+    // Repeated edits must remain valid after regenerating slices, clearing
+    // slices, and clearing/reimporting the model document.
+    ModelTrajPlan::BurTrajPlan lifecyclePlan;
+    ModelTrajPlan::GeneralData lifecycleDocument;
+    for(int cycle = 0; cycle < 4; ++cycle) {
+        if(cycle == 2) lifecyclePlan.clearCuttingPlanes(lifecycleDocument);
+        if(cycle == 3) lifecyclePlan.clear(lifecycleDocument);
+        lifecycleDocument.modelDataManager_.mainModelData_ = model.mainModelData_;
+        lifecycleDocument.processingState_.isSTLProcessed = true;
+        lifecycleDocument.slicingData_.managedParams_.maxSliceCount = 3;
+        lifecycleDocument.boundaryData_.minStep_ = 2.0;
+        coplanar_checks::require(lifecyclePlan.generateCuttingPlanes(lifecycleDocument),
+            "Regenerating slices after an edit/clear failed.");
+        lifecycleDocument.slicingData_.cuttingPlanes_[1].rotation_x = 12.0;
+        coplanar_checks::require(lifecyclePlan.updateSingleCuttingPlaneSize(lifecycleDocument, 1),
+            "Adjusting a regenerated slice failed.");
+    }
     ModelTrajPlan::UniformSlicer slicer;
     ModelTrajPlan::SlicingParams params;
     params.mode = ModelTrajPlan::SlicingMode::AA;
