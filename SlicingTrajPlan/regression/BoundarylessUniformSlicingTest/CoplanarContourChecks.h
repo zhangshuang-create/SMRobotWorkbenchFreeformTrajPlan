@@ -1,4 +1,5 @@
 #pragma once
+#include <SlicingTrajPlan/TrajectoryFrame.h>
 
 #include <SlicingTrajPlan/BurTrajPlan.h>
 #include <SlicingTrajPlan/TrajectoryGenerator.h>
@@ -156,10 +157,65 @@ namespace coplanar_checks
         require((output[firstColumn.size()].pose.block<3,1>(0,3) -
             trajectories.sampledBoundaryPoints_[1].front()).norm() < 1e-6,
             "Changing the initial boundary broke serpentine traversal.");
+        for(const auto& point : output)
+            require(point.point_type == (point.layer_index == 0 || point.layer_index == 2 ? 1 : 0),
+                "Physical boundary and interior point tags are incorrect.");
         generation.z2Offset = 7.0;
         require(generator.generateMATLABTrajectory(ends.internalBoundaries[0], ends.internalBoundaries[1],
             result, generation, &model, output, groups, boundaries, slicing, trajectories),
             "Upper-boundary empty-run generation failed.");
+        for(const auto& point : output)
+            require(point.point_type == (point.layer_index == 3 ? 2 :
+                (point.layer_index == 0 || point.layer_index == 2 ? 1 : 0)),
+                "Empty-run point is not type 2, or physical boundary tag was lost.");
+        // Smooth mode copies the opposite endpoint frame and uses its forward axis for offset.
+        generation.z1Offset = 5.0;
+        require(generator.generateMATLABTrajectory(ends.internalBoundaries[0], ends.internalBoundaries[1],
+            result, generation, &model, output, groups, boundaries, slicing, trajectories),
+            "Two-ended empty-run generation failed.");
+        for(double offsetSign : {1.0, -1.0}) for(int forwardAxis : {0, 1, 2}) {
+        generation.z1Offset = 5.0*offsetSign;
+        generation.z2Offset = 7.0*offsetSign;
+        generation.forwardAxis = forwardAxis;
+        generation.upperTransitionSmoothPose = generation.lowerTransitionSmoothPose = false;
+        require(generator.generateMATLABTrajectory(ends.internalBoundaries[0], ends.internalBoundaries[1],
+            result, generation, &model, output, groups, boundaries, slicing, trajectories),
+            "Default offset generation failed with signed offset or remapped tool axes.");
+        const auto defaultPoses = output;
+        for(bool smoothUpper : {false, true}) for(bool smoothLower : {false, true}) {
+            generation.upperTransitionSmoothPose = smoothUpper;
+            generation.lowerTransitionSmoothPose = smoothLower;
+            require(generator.generateMATLABTrajectory(ends.internalBoundaries[0], ends.internalBoundaries[1],
+                result, generation, &model, output, groups, boundaries, slicing, trajectories),
+                "Independent transition pose generation failed.");
+            require(output.size() == defaultPoses.size(), "Transition pose option changed sample count.");
+            std::map<std::pair<int,int>, Eigen::Matrix4d> poses;
+            for(const auto& point : defaultPoses) poses[{point.trajectory_index, point.layer_index}] = point.pose;
+            for(size_t i=0; i<output.size(); ++i) {
+                const auto& point = output[i];
+                Eigen::Vector3d expectedPosition = defaultPoses[i].pose.block<3,1>(0,3);
+                const auto mapping = trajectoryFrameMapping(generation.normalAxis, generation.forwardAxis);
+                if(point.layer_index == 0 && smoothUpper) {
+                    const Eigen::Matrix3d frame = poses[{point.trajectory_index,3}].block<3,3>(0,0) * mapping.transpose();
+                    expectedPosition = poses[{point.trajectory_index,1}].block<3,1>(0,3) - generation.z1Offset*frame.col(0);
+                } else if(point.layer_index == 4 && smoothLower) {
+                    const Eigen::Matrix3d frame = poses[{point.trajectory_index,1}].block<3,3>(0,0) * mapping.transpose();
+                    expectedPosition = poses[{point.trajectory_index,3}].block<3,1>(0,3) + generation.z2Offset*frame.col(0);
+                }
+                require(point.pose.block<3,1>(0,3).isApprox(expectedPosition),
+                    "Transition offset did not follow the selected opposite boundary forward axis.");
+                // Labels are intentionally reversed here: layer 3 is nearest origin (lower).
+                const int source = point.layer_index == 0 ? (smoothUpper ? 3 : 1) :
+                    (point.layer_index == 4 ? (smoothLower ? 1 : 3) : point.layer_index);
+                require(point.pose.block<3,3>(0,0).isApprox(poses[{point.trajectory_index,source}].block<3,3>(0,0)),
+                    "Transition pose did not use the correct physical endpoint.");
+            }
+        }
+        }
+        generation.z1Offset = 5.0; generation.z2Offset = 7.0; generation.forwardAxis = 0;
+        require(generator.generateMATLABTrajectory(ends.internalBoundaries[0], ends.internalBoundaries[1],
+            result, generation, &model, output, groups, boundaries, slicing, trajectories),
+            "Smooth transition preview setup failed.");
         const Eigen::Matrix4d firstPose = output.front().pose;
         generation.previewFirstPoint = true;
         require(generator.generateMATLABTrajectory(ends.internalBoundaries[0], ends.internalBoundaries[1],

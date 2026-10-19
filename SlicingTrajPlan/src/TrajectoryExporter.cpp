@@ -264,7 +264,9 @@ namespace ModelTrajPlan
                  << "COMMENT\t\t= \"Spray Trajectory\";\n"
                  << "PROG_SIZE\t= 0;\n"
                  << "VERSION\t\t= 0;\n"
-                 << "LINE_COUNT\t= " << trajectoryPoints.size() + (tcp.enabled ? 10 : 2) << ";\n"
+                 << "LINE_COUNT\t= " << trajectoryPoints.size() + std::count_if(trajectoryPoints.begin(), trajectoryPoints.end(),
+                     [](const TrajectoryPoint& p) { return p.point_type == 1 || p.point_type == 2; })
+                     + (tcp.enabled ? 10 : 2) << ";\n"
                  << "MEMORY_SIZE\t= 0;\n"
                  << "PROTECT\t\t= READ_WRITE;\n"
                  << "DEFAULT_GROUP\t= 1,*,*,*,*;\n"
@@ -285,12 +287,22 @@ namespace ModelTrajPlan
                 firstMotionLine = 11;
             }
 
+            std::size_t motionLine = firstMotionLine;
             for (size_t i = 0; i < trajectoryPoints.size(); ++i) {
                 const auto& point = trajectoryPoints[i];
+                if(point.point_type == 1 || point.point_type == 2) {
+                    file << "   " << motionLine++ << ":  ! P[" << (i + 1) << "] "
+                        << (point.point_type == 1 ? "Boundary point" : "Transition offset point") << " ;\n";
+                }
                 const int speed = std::max(1, static_cast<int>(std::lround(
                     point.velocity > 0.0 ? point.velocity : 50.0)));
-                file << "   " << (i + firstMotionLine) << ":  L P[" << (i + 1) << "] "
-                    << speed << "mm/sec CNT100    ;\n";
+                if(i == 0) {
+                    // FANUC joint motion uses percentage speed, not linear mm/sec.
+                    file << "   " << motionLine++ << ":  J P[1] 10% FINE    ;\n";
+                } else {
+                    file << "   " << motionLine++ << ":  L P[" << (i + 1) << "] "
+                        << speed << "mm/sec CNT100    ;\n";
+                }
             }
 
             file << "/POS\n";
@@ -358,10 +370,10 @@ namespace ModelTrajPlan
 
                 // Add point-type annotation
                 if (point.point_type == 1) {
-                    file << "  ! Key point";
+                    file << "  ! Boundary point";
                 }
                 else if (point.point_type == 2) {
-                    file << "  ! Stop point";
+                    file << "  ! Transition offset point";
                 }
                 file << "\n";
             }
@@ -377,15 +389,17 @@ namespace ModelTrajPlan
                 int speedValue = static_cast<int>(point.velocity);
                 if (speedValue < 1) speedValue = 50;  // Default speed
 
-                std::string moveType = "MoveL";
-                const bool mustStop = point.point_type == 2 ||
-                    i + 1 == trajectoryPoints.size();
+                std::string moveType = i == 0 ? "MoveJ" : "MoveL";
+                const bool mustStop = i == 0 || i + 1 == trajectoryPoints.size();
                 // z10 keeps continuous motion for the roughly 10 mm samples on one
-                // trajectory. The final and explicit stop targets are exact.
+                // trajectory. The first and final targets are exact; type 2 is an offset, not a stop.
                 std::string zoneType = mustStop ? "fine" : "z10";
 
                 file << "    " << moveType << " p" << (i + 1) << ", v" << speedValue << ", "
-                    << zoneType << ", " << (tcp.enabled ? "toolTCP" : "tool0") << ";\n";
+                    << zoneType << ", " << (tcp.enabled ? "toolTCP" : "tool0") << ";";
+                if(point.point_type == 1) file << " ! Boundary point";
+                else if(point.point_type == 2) file << " ! Transition offset point";
+                file << "\n";
             }
 
             file << "  ENDPROC\n";

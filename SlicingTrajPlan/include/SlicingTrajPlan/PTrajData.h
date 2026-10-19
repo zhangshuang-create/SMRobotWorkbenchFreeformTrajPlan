@@ -33,9 +33,11 @@ namespace ModelTrajPlan
         int normalAxis = 4;
         int forwardAxis = 0;
         bool previewFirstPoint = false;
+        bool upperTransitionSmoothPose = false;
+        bool lowerTransitionSmoothPose = false;
         // 偏移参数
-        double z1Offset = 0.0;            // 起始Z偏移（上边界偏移）
-        double z2Offset = 0.0;            // 结束Z偏移（下边界偏移）
+        double z1Offset = 0.0;            // 起始Z偏移（下边界偏移）
+        double z2Offset = 0.0;            // 结束Z偏移（上边界偏移）
         double offsetDistance = 1.0;      // 法线偏移距离
 
         // 速度参数
@@ -83,7 +85,7 @@ namespace ModelTrajPlan
         double timestamp = 0.0;                              // 时间戳
         double velocity = 0.0;                               // 速度
         double acceleration = 0.0;                           // 加速度
-        int point_type = 0;                                  // 点类型（0=普通点，1=关键点，2=停止点）
+        int point_type = 0;                                  // 点类型（0=普通点，1=边界点，2=偏移过渡点）
     };
 
     // CoordinateFrame 枚举定义在 PublicData/TrajData/TrajData.h 中

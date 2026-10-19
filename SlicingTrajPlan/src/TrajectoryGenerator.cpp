@@ -448,9 +448,6 @@ namespace ModelTrajPlan
                     return false;
                 }
                 if (!requiresEmptyRun) continue;
-                if (!requiresEmptyRun) {
-                    continue;
-                }
 
                 const Eigen::Vector3d& lowerBoundaryPoint = trajectory.front();
                 const Eigen::Vector3d& lowerAdjacentSlicePoint = trajectory[1];
@@ -646,9 +643,7 @@ namespace ModelTrajPlan
 
             for (size_t i = 0; i < layerPoints.size(); ++i) {
                 // A first offset point also needs the physical boundary pose.
-                const bool hasStartOffset = reverseDirection
-                    ? trajParams.z2Offset != 0.0 : trajParams.z1Offset != 0.0;
-                if (trajParams.previewFirstPoint && i > (hasStartOffset ? 1u : 0u)) break;
+                // Generate the whole first column so a transition preview can use the opposite boundary pose.
                 // [Serpentine] Select point index based on direction
                 size_t pointIndex = reverseDirection ? (layerPoints.size() - 1 - i) : i;
                 const auto& point = layerPoints[pointIndex];
@@ -744,7 +739,13 @@ namespace ModelTrajPlan
 
                 trajPoint.velocity = trajParams.normalVelocity;
                 trajPoint.acceleration = trajParams.acceleration;
-                trajPoint.point_type = 0;
+                const size_t lowerBoundaryIndex = trajParams.z1Offset != 0.0 ? 1u : 0u;
+                const size_t upperBoundaryIndex = layerPoints.size() - 1u -
+                    (trajParams.z2Offset != 0.0 ? 1u : 0u);
+                const bool offsetPoint = (pointIndex == 0 && trajParams.z1Offset != 0.0) ||
+                    (pointIndex + 1 == layerPoints.size() && trajParams.z2Offset != 0.0);
+                trajPoint.point_type = offsetPoint ? 2 :
+                    (pointIndex == lowerBoundaryIndex || pointIndex == upperBoundaryIndex ? 1 : 0);
                 // spray_distance is a physical nozzle-to-surface length. The
                 // offset sign selects the pose direction, never a negative
                 // propagation distance for the thickness model.
@@ -759,11 +760,22 @@ namespace ModelTrajPlan
         }
 
         // Empty-run points are translations of the adjacent physical boundary
-        // layer. Reconstructing X/Y from an offset point can rotate its frame
-        // at an end corner, so copy the completed boundary pose verbatim and
-        // retain only the offset point's translation.
+        // layer. Default mode copies its own boundary pose; smooth mode copies
+        // the opposite physical boundary pose on the same trajectory and uses
+        // its canonical forward axis for the empty-run translation.
         if((trajParams.z1Offset != 0.0 || trajParams.z2Offset != 0.0) &&
             !trajectoryPoints.empty()) {
+            // User-facing lower boundary is the endpoint nearest the origin on the first seam.
+            // This is independent of internal boundary labels and serpentine traversal order.
+            bool frontIsLower = true;
+            for(const auto& column : sampledPoints) {
+                const size_t front = trajParams.z1Offset != 0.0 ? 1u : 0u;
+                const size_t backInset = trajParams.z2Offset != 0.0 ? 1u : 0u;
+                if(column.size() <= front + backInset) continue;
+                const size_t back = column.size() - 1u - backInset;
+                frontIsLower = column[front].squaredNorm() <= column[back].squaredNorm();
+                break;
+            }
             std::map<std::pair<int, int>, Eigen::Matrix4d> boundaryPoses;
             for(const TrajectoryPoint& point : trajectoryPoints) {
                 boundaryPoses[{ point.trajectory_index, point.layer_index }] = point.pose;
@@ -775,17 +787,36 @@ namespace ModelTrajPlan
                 }
                 const int layerCount = static_cast<int>(sampledPoints[
                     static_cast<std::size_t>(point.trajectory_index)].size());
+                const int frontBoundary = trajParams.z1Offset != 0.0 ? 1 : 0;
+                const int backBoundary = layerCount - 1 - (trajParams.z2Offset != 0.0 ? 1 : 0);
                 int sourceLayer = -1;
+                int anchorLayer = -1;
+                double signedOffset = 0.0;
+                bool smooth = false;
                 if(trajParams.z1Offset != 0.0 && point.layer_index == 0) {
-                    sourceLayer = 1;
+                    smooth = frontIsLower ? trajParams.lowerTransitionSmoothPose : trajParams.upperTransitionSmoothPose;
+                    sourceLayer = smooth ? backBoundary : frontBoundary;
+                    anchorLayer = frontBoundary;
+                    signedOffset = -trajParams.z1Offset;
                 } else if(trajParams.z2Offset != 0.0 && point.layer_index == layerCount - 1) {
-                    sourceLayer = layerCount - 2;
+                    smooth = frontIsLower ? trajParams.upperTransitionSmoothPose : trajParams.lowerTransitionSmoothPose;
+                    sourceLayer = smooth ? frontBoundary : backBoundary;
+                    anchorLayer = backBoundary;
+                    signedOffset = trajParams.z2Offset;
                 }
                 const auto source = boundaryPoses.find({ point.trajectory_index, sourceLayer });
                 if(source == boundaryPoses.end()) {
                     continue;
                 }
-                const Eigen::Vector3d position = point.pose.block<3, 1>(0, 3);
+                Eigen::Vector3d position = point.pose.block<3, 1>(0, 3);
+                if(smooth) {
+                    const auto anchor = boundaryPoses.find({ point.trajectory_index, anchorLayer });
+                    if(anchor == boundaryPoses.end()) return false;
+                    // Before tool-axis remapping, column X is the geometric forward
+                    // direction from the first sampled boundary toward the last.
+                    const Eigen::Vector3d forward = source->second.block<3, 1>(0, 0).normalized();
+                    position = anchor->second.block<3, 1>(0, 3) + signedOffset * forward;
+                }
                 point.pose = source->second;
                 point.pose.block<3, 1>(0, 3) = position;
             }

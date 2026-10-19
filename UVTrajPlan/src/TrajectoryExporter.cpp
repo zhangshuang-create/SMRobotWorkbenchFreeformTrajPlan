@@ -330,14 +330,14 @@ namespace SprayTrajPlan
                 std::max(seamValue(*segments[i], "seam_process.speed", baseSpeed), EPS);
             const bool first = i == 0 || segments[i] != segments[i - 1];
             const bool last = i + 1 == points.size() || segments[i] != segments[i + 1];
-            if (first || last) pointTypes[i] = 1;
+            pointTypes[i] = segments[i]->kind == "SURFACE_SCAN"
+                ? ((first || last) ? 1 : 0) : 2;
             if (i > 0) {
                 const double deltaTime = (exportPoints[i] - exportPoints[i - 1]).norm() / velocities[i];
                 timestamps[i] = timestamps[i - 1] + deltaTime;
                 if (deltaTime > EPS) accelerations[i] = (velocities[i] - velocities[i - 1]) / deltaTime;
             }
         }
-        pointTypes.back() = 2;
 
         for (size_t i = 0; i < points.size(); ++i) {
             Eigen::Quaterniond orientation = orientationQuaternion(tangents[i], inward[i]);
