@@ -392,8 +392,9 @@ bool UniformSlicer::convertToCuttingPlanes(
 // Output: vector<BoundaryLine> - traced contour lines
 std::vector<BoundaryLine> UniformSlicer::traceContoursFromIntersections(
     const ModelData& modelData,
-    const SlicePlane& plane, bool allowOpen)
+    const SlicePlane& plane, bool allowOpen, size_t* invalidComponents)
 {
+    if(invalidComponents) *invalidComponents=0;
     std::vector<BoundaryLine> contours;
     constexpr double tolerance = 1e-6;
     if (!plane.point.allFinite() || !plane.normal.allFinite() ||
@@ -503,7 +504,10 @@ std::vector<BoundaryLine> UniformSlicer::traceContoursFromIntersections(
             else if (adjacency[id].size() != 2) simple = false;
         }
         if (closed ? component.size() < 3
-            : (!allowOpen || !simple || ends != 2 || component.size() < 2)) continue;
+            : (!allowOpen || !simple || ends != 2 || component.size() < 2)) {
+            if(invalidComponents) ++*invalidComponents;
+            continue;
+        }
         std::vector<size_t> ring;
         size_t previous = points.size(), current = closed ? start : chainStart;
         do {

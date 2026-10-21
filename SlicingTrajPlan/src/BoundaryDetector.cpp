@@ -1395,8 +1395,9 @@ bool PairOfVector3dCompare::operator()(const std::pair<Eigen::Vector3d, Eigen::V
     }
 
     // Original algorithm entry, with its old rendering-data output removed.
-    bool BoundaryDetector::detectBoundaries(const ModelData& modelData, BoundaryData& boundaryData, Epiphyseal& intersectionPoints)
+    bool BoundaryDetector::detectBoundaries(const ModelData& modelData, BoundaryData& boundaryData, Epiphyseal& intersectionPoints, BoundaryTopologyDiagnostics* topology)
     {
+        if(topology) *topology = {};
         // [ALGORITHM] Detect boundaries from STL model
         // Input: modelData - STL model data
         // Output: boundaryData - detected upper/lower boundaries
@@ -1417,12 +1418,17 @@ bool PairOfVector3dCompare::operator()(const std::pair<Eigen::Vector3d, Eigen::V
                 return std::make_pair(a, b);
             };
             for (const auto& [edge, count] : edgeCount) {
+                if(topology && count>2) ++topology->nonManifoldEdges;
                 if (count != 1) continue;
                 adjacency[edge.first].push_back(edge.second);
                 adjacency[edge.second].push_back(edge.first);
                 unvisitedEdges.insert(edgeKey(edge.first, edge.second));
             }
 
+            if(topology) for(const auto& entry:adjacency) {
+                if(entry.second.size()>2) ++topology->branchVertices;
+                if(entry.second.size()<2) ++topology->openVertices;
+            }
             std::vector<std::vector<Eigen::Vector3d>> boundaryLoops;
             while (!unvisitedEdges.empty()) {
                 const Eigen::Vector3d start = unvisitedEdges.begin()->first;
@@ -1455,6 +1461,10 @@ bool PairOfVector3dCompare::operator()(const std::pair<Eigen::Vector3d, Eigen::V
                 }
             }
 
+            if(topology) {
+                topology->loopCount=boundaryLoops.size();
+                if(!topology->usable()) return false;
+            }
             if (boundaryLoops.size() >= 2) {
                 const auto loopCenter = [](const std::vector<Eigen::Vector3d>& loop) {
                     Eigen::Vector3d center = Eigen::Vector3d::Zero();
@@ -1469,7 +1479,8 @@ bool PairOfVector3dCompare::operator()(const std::pair<Eigen::Vector3d, Eigen::V
                 };
                 // Large/small ends are geometric labels, independent of Z.
                 // Equal-size ends retain their traced order.
-                std::stable_sort(boundaryLoops.begin(), boundaryLoops.end(),
+                // Baffle callers require two unordered rims; legacy end labeling is not needed.
+                if(!topology) std::stable_sort(boundaryLoops.begin(), boundaryLoops.end(),
                     [&](const auto& lhs, const auto& rhs) { return perimeter(lhs) > perimeter(rhs); });
 
                 const auto fillBoundary = [&](const std::vector<Eigen::Vector3d>& loop,
@@ -1505,6 +1516,7 @@ bool PairOfVector3dCompare::operator()(const std::pair<Eigen::Vector3d, Eigen::V
                     BoundaryLineType::UpperBoundary);
             }
 
+            if(topology) return !boundaryData.upperBoundary_.points.empty() && !boundaryData.lowerBoundary_.points.empty();
             if (!boundaryData.upperBoundary_.points.empty() && !boundaryData.lowerBoundary_.points.empty())
             {
                 // Clear previous intersection/slicing artifacts before rebuilding.

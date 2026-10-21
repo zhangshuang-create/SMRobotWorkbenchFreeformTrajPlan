@@ -85,9 +85,11 @@ namespace ModelTrajPlan
         //        planeNormal - plane normal vector
         //        z - Z height
         // Output: vector<BoundaryLine> - traced contour lines
+    public:
+        // Shared topology-preserving mesh section API.
         static std::vector<BoundaryLine> traceContoursFromIntersections(
             const ModelData& modelData,
-            const SlicePlane& plane, bool allowOpen = false);
+            const SlicePlane& plane, bool allowOpen = false, size_t* invalidComponents = nullptr);
     };
 
 }

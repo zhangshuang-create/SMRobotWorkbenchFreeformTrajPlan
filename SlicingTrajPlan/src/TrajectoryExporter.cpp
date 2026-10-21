@@ -298,7 +298,7 @@ namespace ModelTrajPlan
                     point.velocity > 0.0 ? point.velocity : 50.0)));
                 if(i == 0) {
                     // FANUC joint motion uses percentage speed, not linear mm/sec.
-                    file << "   " << motionLine++ << ":  J P[1] 10% FINE    ;\n";
+                    file << "   " << motionLine++ << ":  J P[1] 10% CNT100    ;\n";
                 } else {
                     file << "   " << motionLine++ << ":  L P[" << (i + 1) << "] "
                         << speed << "mm/sec CNT100    ;\n";
@@ -390,10 +390,9 @@ namespace ModelTrajPlan
                 if (speedValue < 1) speedValue = 50;  // Default speed
 
                 std::string moveType = i == 0 ? "MoveJ" : "MoveL";
-                const bool mustStop = i == 0 || i + 1 == trajectoryPoints.size();
-                // z10 keeps continuous motion for the roughly 10 mm samples on one
+                // All exported samples use the requested full blending policy.
                 // trajectory. The first and final targets are exact; type 2 is an offset, not a stop.
-                std::string zoneType = mustStop ? "fine" : "z10";
+                std::string zoneType = "z100";
 
                 file << "    " << moveType << " p" << (i + 1) << ", v" << speedValue << ", "
                     << zoneType << ", " << (tcp.enabled ? "toolTCP" : "tool0") << ";";

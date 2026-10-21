@@ -20,6 +20,10 @@ namespace ModelTrajPlan
 {
     // Original BurTrajPlan boundary algorithm. It owns only algorithm data;
     // rendering conversion belongs to the Workbench.
+    struct BoundaryTopologyDiagnostics {
+        size_t loopCount=0, branchVertices=0, openVertices=0, nonManifoldEdges=0;
+        bool usable() const { return loopCount==2 && !branchVertices && !openVertices && !nonManifoldEdges; }
+    };
     class BoundaryDetector final
     {
     public:
@@ -27,7 +31,7 @@ namespace ModelTrajPlan
         ~BoundaryDetector();
 
         bool detectBoundaries(const ModelData& modelData, BoundaryData& boundaryData,
-            Epiphyseal& intersectionPoints);
+            Epiphyseal& intersectionPoints, BoundaryTopologyDiagnostics* topology = nullptr);
         void computeLineAttributes(Epiphyseal& lines);
         bool generateAdaptiveNodes(const Epiphyseal& lines, Epiphyseal& pointNodes,
             double epsilon = 5.0, double minimumStep = 50.0);
