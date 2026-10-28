@@ -7,7 +7,7 @@ project (Periodic_Lloyd_3_Demo)
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 # Instruct CMake to run moc automatically when needed.
 set(CMAKE_AUTOMOC ON)
-cmake_minimum_required(VERSION 2.8.11)
+cmake_minimum_required(VERSION 3.20)
 if(POLICY CMP0053)
   cmake_policy(SET CMP0053 OLD)
 endif()

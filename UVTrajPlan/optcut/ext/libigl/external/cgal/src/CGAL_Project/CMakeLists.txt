@@ -8,7 +8,7 @@ if(NOT PROJECT_NAME)
 endif()
 
 # Minimal version of CMake:
-cmake_minimum_required(VERSION 2.8.11)
+cmake_minimum_required(VERSION 3.20)
 
 # Tested version:
 cmake_policy(VERSION 2.8.11)

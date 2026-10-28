@@ -168,21 +168,35 @@ namespace coplanar_checks
             require(point.point_type == (point.layer_index == 3 ? 2 :
                 (point.layer_index == 0 || point.layer_index == 2 ? 1 : 0)),
                 "Empty-run point is not type 2, or physical boundary tag was lost.");
-        // Smooth mode copies the opposite endpoint frame and uses its forward axis for offset.
+        // Pose, travel offset and normal distance are independently selected.
         generation.z1Offset = 5.0;
         require(generator.generateMATLABTrajectory(ends.internalBoundaries[0], ends.internalBoundaries[1],
             result, generation, &model, output, groups, boundaries, slicing, trajectories),
             "Two-ended empty-run generation failed.");
         for(double offsetSign : {1.0, -1.0}) for(int forwardAxis : {0, 1, 2}) {
+        generation.offsetDistance = 2.5*offsetSign;
+        generation.upperTransitionNormalOffset = generation.lowerTransitionNormalOffset = true;
+        generation.upperTransitionFollowSprayDistance = generation.lowerTransitionFollowSprayDistance = true;
         generation.z1Offset = 5.0*offsetSign;
         generation.z2Offset = 7.0*offsetSign;
         generation.forwardAxis = forwardAxis;
         generation.upperTransitionSmoothPose = generation.lowerTransitionSmoothPose = false;
+        generation.upperTransitionOppositeOffset = generation.lowerTransitionOppositeOffset = false;
         require(generator.generateMATLABTrajectory(ends.internalBoundaries[0], ends.internalBoundaries[1],
             result, generation, &model, output, groups, boundaries, slicing, trajectories),
             "Default offset generation failed with signed offset or remapped tool axes.");
         const auto defaultPoses = output;
-        for(bool smoothUpper : {false, true}) for(bool smoothLower : {false, true}) {
+        for(bool offsetUpper : {false, true}) for(bool offsetLower : {false, true})
+        for(bool smoothUpper : {false, true}) for(bool smoothLower : {false, true})
+        for(int upperMode : {0, 1, 2}) for(int lowerMode : {0, 1, 2}) {
+            generation.upperTransitionNormalOffset = upperMode != 0;
+            generation.lowerTransitionNormalOffset = lowerMode != 0;
+            generation.upperTransitionFollowSprayDistance = upperMode == 1;
+            generation.lowerTransitionFollowSprayDistance = lowerMode == 1;
+            generation.upperTransitionSprayDistance = 4.0;
+            generation.lowerTransitionSprayDistance = 6.0;
+            generation.upperTransitionOppositeOffset = offsetUpper;
+            generation.lowerTransitionOppositeOffset = offsetLower;
             generation.upperTransitionSmoothPose = smoothUpper;
             generation.lowerTransitionSmoothPose = smoothLower;
             require(generator.generateMATLABTrajectory(ends.internalBoundaries[0], ends.internalBoundaries[1],
@@ -193,22 +207,34 @@ namespace coplanar_checks
             for(const auto& point : defaultPoses) poses[{point.trajectory_index, point.layer_index}] = point.pose;
             for(size_t i=0; i<output.size(); ++i) {
                 const auto& point = output[i];
-                Eigen::Vector3d expectedPosition = defaultPoses[i].pose.block<3,1>(0,3);
                 const auto mapping = trajectoryFrameMapping(generation.normalAxis, generation.forwardAxis);
-                if(point.layer_index == 0 && smoothUpper) {
-                    const Eigen::Matrix3d frame = poses[{point.trajectory_index,3}].block<3,3>(0,0) * mapping.transpose();
-                    expectedPosition = poses[{point.trajectory_index,1}].block<3,1>(0,3) - generation.z1Offset*frame.col(0);
-                } else if(point.layer_index == 4 && smoothLower) {
-                    const Eigen::Matrix3d frame = poses[{point.trajectory_index,1}].block<3,3>(0,0) * mapping.transpose();
-                    expectedPosition = poses[{point.trajectory_index,3}].block<3,1>(0,3) + generation.z2Offset*frame.col(0);
-                }
-                require(point.pose.block<3,1>(0,3).isApprox(expectedPosition),
-                    "Transition offset did not follow the selected opposite boundary forward axis.");
-                // Labels are intentionally reversed here: layer 3 is nearest origin (lower).
-                const int source = point.layer_index == 0 ? (smoothUpper ? 3 : 1) :
+                const bool front = point.layer_index == 0;
+                const bool transition = front || point.layer_index == 4;
+                // Labels are intentionally reversed: layer 3 is nearest origin (lower).
+                const int source = front ? (smoothUpper ? 3 : 1) :
                     (point.layer_index == 4 ? (smoothLower ? 1 : 3) : point.layer_index);
-                require(point.pose.block<3,3>(0,0).isApprox(poses[{point.trajectory_index,source}].block<3,3>(0,0)),
-                    "Transition pose did not use the correct physical endpoint.");
+                const Eigen::Matrix3d expectedRotation = poses[{point.trajectory_index,source}].block<3,3>(0,0);
+                require(point.pose.block<3,3>(0,0).isApprox(expectedRotation),
+                    "Normal offset controls changed the selected endpoint orientation.");
+                Eigen::Vector3d expectedPosition = defaultPoses[i].pose.block<3,1>(0,3);
+                double expectedDistance = std::abs(generation.offsetDistance);
+                if(transition) {
+                    const auto& column = trajectories.sampledBoundaryPoints_[point.trajectory_index];
+                    expectedPosition = column[point.layer_index];
+                    if(front ? offsetUpper : offsetLower) {
+                        const Eigen::Matrix3d otherFrame = poses[{point.trajectory_index,front ? 3 : 1}].block<3,3>(0,0) * mapping.transpose();
+                        expectedPosition = column[front ? 1 : 3] +
+                            (front ? -generation.z1Offset : generation.z2Offset) * otherFrame.col(0);
+                    }
+                    const int mode = front ? upperMode : lowerMode;
+                    expectedDistance = mode == 0 ? 0.0 : (mode == 1 ? std::abs(generation.offsetDistance) : (front ? 4.0 : 6.0));
+                    const Eigen::Matrix3d canonical = expectedRotation * mapping.transpose();
+                    expectedPosition -= expectedDistance * canonical.col(2);
+                }
+                require((point.pose.block<3,1>(0,3) - expectedPosition).norm() < 1e-6,
+                    "Transition normal offset was doubled, used the wrong normal, or altered travel offset.");
+                require(std::abs(point.spray_distance - expectedDistance) < 1e-9,
+                    "Transition spray distance metadata disagrees with its offset mode.");
             }
         }
         }

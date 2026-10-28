@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.1)
+cmake_minimum_required(VERSION 3.20)
 project(igl_stb_image)
 
 add_library(${PROJECT_NAME} SHARED igl_stb_image.cpp stb_image.h stb_image_write.h)

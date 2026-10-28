@@ -4,7 +4,7 @@
 
 project( Algebraic_kernel_d_Examples )
 
-cmake_minimum_required(VERSION 2.8.11)
+cmake_minimum_required(VERSION 3.20)
 
 
 find_package(CGAL QUIET COMPONENTS Core MPFI)

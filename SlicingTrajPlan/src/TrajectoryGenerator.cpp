@@ -760,9 +760,9 @@ namespace ModelTrajPlan
         }
 
         // Empty-run points are translations of the adjacent physical boundary
-        // layer. Default mode copies its own boundary pose; smooth mode copies
-        // the opposite physical boundary pose on the same trajectory and uses
-        // its canonical forward axis for the empty-run translation.
+        // layer. Orientation and translation direction have independent sources.
+        // Smooth pose copies the opposite boundary orientation; opposite offset
+        // uses that boundary forward axis regardless of the chosen orientation.
         if((trajParams.z1Offset != 0.0 || trajParams.z2Offset != 0.0) &&
             !trajectoryPoints.empty()) {
             // User-facing lower boundary is the endpoint nearest the origin on the first seam.
@@ -793,13 +793,19 @@ namespace ModelTrajPlan
                 int anchorLayer = -1;
                 double signedOffset = 0.0;
                 bool smooth = false;
+                bool oppositeOffset = false;
+                int offsetSourceLayer = -1;
                 if(trajParams.z1Offset != 0.0 && point.layer_index == 0) {
                     smooth = frontIsLower ? trajParams.lowerTransitionSmoothPose : trajParams.upperTransitionSmoothPose;
+                    oppositeOffset = frontIsLower ? trajParams.lowerTransitionOppositeOffset : trajParams.upperTransitionOppositeOffset;
+                    offsetSourceLayer = backBoundary;
                     sourceLayer = smooth ? backBoundary : frontBoundary;
                     anchorLayer = frontBoundary;
                     signedOffset = -trajParams.z1Offset;
                 } else if(trajParams.z2Offset != 0.0 && point.layer_index == layerCount - 1) {
                     smooth = frontIsLower ? trajParams.upperTransitionSmoothPose : trajParams.lowerTransitionSmoothPose;
+                    oppositeOffset = frontIsLower ? trajParams.upperTransitionOppositeOffset : trajParams.lowerTransitionOppositeOffset;
+                    offsetSourceLayer = frontBoundary;
                     sourceLayer = smooth ? frontBoundary : backBoundary;
                     anchorLayer = backBoundary;
                     signedOffset = trajParams.z2Offset;
@@ -808,17 +814,28 @@ namespace ModelTrajPlan
                 if(source == boundaryPoses.end()) {
                     continue;
                 }
-                Eigen::Vector3d position = point.pose.block<3, 1>(0, 3);
-                if(smooth) {
-                    const auto anchor = boundaryPoses.find({ point.trajectory_index, anchorLayer });
-                    if(anchor == boundaryPoses.end()) return false;
-                    // Before tool-axis remapping, column X is the geometric forward
-                    // direction from the first sampled boundary toward the last.
-                    const Eigen::Vector3d forward = source->second.block<3, 1>(0, 0).normalized();
-                    position = anchor->second.block<3, 1>(0, 3) + signedOffset * forward;
+                const auto anchor = boundaryPoses.find({ point.trajectory_index, anchorLayer });
+                const auto offsetSource = boundaryPoses.find({ point.trajectory_index, offsetSourceLayer });
+                if(anchor == boundaryPoses.end() || offsetSource == boundaryPoses.end()) return false;
+                const Eigen::Matrix3d rotation = source->second.block<3, 3>(0, 0);
+                // Start from the un-offset geometry, not a position that already
+                // includes the global spray distance. Apply the final normal once.
+                const auto& column = sampledPoints[static_cast<std::size_t>(point.trajectory_index)];
+                Eigen::Vector3d position = column[static_cast<std::size_t>(point.layer_index)];
+                if(oppositeOffset) {
+                    const Eigen::Vector3d forward = offsetSource->second.block<3, 1>(0, 0).normalized();
+                    position = column[static_cast<std::size_t>(anchorLayer)] + signedOffset * forward;
                 }
-                point.pose = source->second;
+                const bool isLower = point.layer_index == 0 ? frontIsLower : !frontIsLower;
+                const bool normalOffset = isLower ? trajParams.lowerTransitionNormalOffset : trajParams.upperTransitionNormalOffset;
+                const bool followDistance = isLower ? trajParams.lowerTransitionFollowSprayDistance : trajParams.upperTransitionFollowSprayDistance;
+                const double customDistance = isLower ? trajParams.lowerTransitionSprayDistance : trajParams.upperTransitionSprayDistance;
+                const double distance = normalOffset ? std::abs(followDistance ? trajParams.offsetDistance : customDistance) : 0.0;
+                if(!std::isfinite(distance)) return false;
+                position -= distance * rotation.col(2);
+                point.pose.block<3, 3>(0, 0) = rotation;
                 point.pose.block<3, 1>(0, 3) = position;
+                point.spray_distance = distance;
             }
         }
         if (trajParams.previewFirstPoint && trajectoryPoints.size() > 1) trajectoryPoints.resize(1);

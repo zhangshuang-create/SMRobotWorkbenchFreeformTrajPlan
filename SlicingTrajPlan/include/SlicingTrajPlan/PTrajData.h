@@ -35,6 +35,15 @@ namespace ModelTrajPlan
         bool previewFirstPoint = false;
         bool upperTransitionSmoothPose = false;
         bool lowerTransitionSmoothPose = false;
+        // Direction selection is independent of transition-point orientation.
+        bool upperTransitionOppositeOffset = false;
+        bool lowerTransitionOppositeOffset = false;
+        bool upperTransitionNormalOffset = true;
+        bool lowerTransitionNormalOffset = true;
+        bool upperTransitionFollowSprayDistance = true;
+        bool lowerTransitionFollowSprayDistance = true;
+        double upperTransitionSprayDistance = 1.0;
+        double lowerTransitionSprayDistance = 1.0;
         // 偏移参数
         double z1Offset = 0.0;            // 起始Z偏移（下边界偏移）
         double z2Offset = 0.0;            // 结束Z偏移（上边界偏移）
