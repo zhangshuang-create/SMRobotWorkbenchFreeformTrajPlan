@@ -91,4 +91,7 @@ endif()
 
 # UV planning is a separate algorithm module.  It owns the OptCuts build
 # target and must participate in the same build graph as this package.
-add_subdirectory(UVTrajPlan)
+option(BUILD_UV_TRAJ_PLAN "Build UV planning, OptCuts and bundled TBB" OFF)
+if(BUILD_UV_TRAJ_PLAN)
+    add_subdirectory(UVTrajPlan)
+endif()
