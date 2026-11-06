@@ -44,7 +44,7 @@ namespace spray_freeform_traj_plan
         double largeEndOffsetMm = 0.0;
         double smallEndOffsetMm = 0.0;
         double optimalSprayDistanceMm = 1.0;
-        double optimalSpeedMmPerSecond = 0.0;
+        double optimalSpeedMmPerSecond = 500.0;
     };
 
     struct UvTrajPlanParameters
