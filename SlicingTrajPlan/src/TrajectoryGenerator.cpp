@@ -690,9 +690,10 @@ namespace ModelTrajPlan
                 }
                 previousNormal = surfaceNormal;
 
-                // 2. X uses the fixed lower-to-upper layer direction. The
-                // return stroke traverses points in reverse order, but its X
-                // axis intentionally remains aligned with the outward stroke.
+                // 2. X follows the first stroke from the chosen initial
+                // boundary. Layer storage order can oppose that stroke when
+                // the nearest endpoint is the supplied upper boundary.
+                // Keep this reference on return strokes as well.
                 Eigen::Vector3d xAxis = Eigen::Vector3d::UnitX();
                 if(pointIndex + 1 < layerPoints.size()) {
                     xAxis = layerPoints[pointIndex + 1] - point;
@@ -709,6 +710,7 @@ namespace ModelTrajPlan
                     xAxis = referenceAxis.cross(surfaceNormal);
                 }
                 xAxis.normalize();
+                if(startFromUpper) xAxis = -xAxis;
                 Eigen::Vector3d yAxis = surfaceNormal.cross(xAxis).normalized();
 
                 // 5. The tool position is offset opposite to its pose normal.
