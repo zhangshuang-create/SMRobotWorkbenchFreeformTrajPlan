@@ -5,6 +5,7 @@
 #include <cmath>
 #include <limits>
 #include <sstream>
+#include <set>
 namespace ModelTrajPlan {
 namespace {
 constexpr double eps=1e-8;
@@ -72,6 +73,104 @@ bool VirtualBaffle::intersectsTriangle(const Triangle& t,double clearance) const
             if(overlap(projected,{a-along+n,b+along+n,b+along-n,a-along-n}))return true;}
     }
     return false;
+}
+NearestBoundaryBaffle buildNearestBoundaryBaffle(const ModelData& model,const Eigen::Vector3d& origin,double thickness,double maxFitResidual){
+    using V3=Eigen::Vector3d;
+    NearestBoundaryBaffle out;out.thickness=thickness;
+    const auto reject=[&](const char* reason){out.enabled=false;out.contours.clear();out.diagnostic=reason;return out;};
+    if(!origin.allFinite() || !std::isfinite(thickness) || thickness<=0 || !std::isfinite(maxFitResidual) || maxFitResidual<=0)
+        return reject("invalid_baffle_parameters");
+    const auto& mesh=model.mainModelData_;
+    if(mesh.m_vertices.empty() || mesh.m_vertices.size()%3 || mesh.m_indices.size()%3)
+        return reject("invalid_boundary_mesh");
+    for(const auto v:mesh.m_vertices)if(!std::isfinite(v))return reject("nonfinite_boundary_mesh");
+    for(const auto i:mesh.m_indices)if(i>=mesh.m_vertices.size()/3)return reject("invalid_boundary_mesh_index");
+    BoundaryDetector detector;
+    const auto edges=detector.getEdgeCountMap(model);
+    using Edge=std::pair<V3,V3>;
+    std::map<V3,std::vector<V3>,Vector3dLexicographicalCompare> adjacent;
+    std::set<Edge,PairOfVector3dCompare> remaining;
+    const auto key=[](V3 a,V3 b){if(Vector3dLexicographicalCompare{}(b,a))std::swap(a,b);return Edge(a,b);};
+    for(const auto& entry:edges){
+        const auto& e=entry.first;
+        if((e.second-e.first).squaredNorm()<1e-20)return reject("degenerate_mesh_edge");
+        if(entry.second>2)++out.topology.nonManifoldEdges;
+        if(entry.second==1){adjacent[e.first].push_back(e.second);adjacent[e.second].push_back(e.first);remaining.insert(e);}
+    }
+    for(const auto& entry:adjacent){if(entry.second.size()>2)++out.topology.branchVertices;if(entry.second.size()<2)++out.topology.openVertices;}
+    if(out.topology.nonManifoldEdges || out.topology.branchVertices || out.topology.openVertices)
+        return reject("invalid_boundary_topology: open, branched or nonmanifold mesh");
+    std::vector<std::vector<V3>> loops;
+    while(!remaining.empty()){
+        const V3 start=remaining.begin()->first;V3 current=start;std::vector<V3> loop;
+        bool closed=false;
+        while(loop.size()<=edges.size()){
+            loop.push_back(current);const auto found=adjacent.find(current);if(found==adjacent.end())break;
+            bool advanced=false;V3 next;
+            for(const auto& candidate:found->second)if(remaining.erase(key(current,candidate))){next=candidate;advanced=true;break;}
+            if(!advanced)break;
+            if((next-start).norm()<1e-9){closed=true;break;}
+            current=next;
+        }
+        if(!closed || loop.size()<3)return reject("open_or_degenerate_boundary");
+        loops.push_back(std::move(loop));
+    }
+    out.topology.loopCount=loops.size();
+    if(loops.empty())return reject("missing_closed_boundary");
+    double best=std::numeric_limits<double>::infinity();
+    for(size_t i=0;i<loops.size();++i){
+        const auto& loop=loops[i];double distance=std::numeric_limits<double>::infinity();
+        for(size_t j=0;j<loop.size();++j){const auto& a=loop[j];const V3 e=loop[(j+1)%loop.size()]-a;
+            const double t=std::clamp((origin-a).dot(e)/e.squaredNorm(),0.,1.);
+            distance=std::min(distance,(a+t*e-origin).squaredNorm());}
+        // Lexicographically traced rings give a stable tie break, independent of triangle order.
+        if(distance<best){best=distance;out.selectedBoundary=static_cast<int>(i);}
+    }
+    if(out.selectedBoundary<0 || !std::isfinite(best))return reject("invalid_selection_distance");
+    out.selectedBoundaryDistance=std::sqrt(best);
+    const auto& ring=loops[out.selectedBoundary];out.selectedBoundaryPointCount=ring.size();
+    double perimeter=0;
+    // Exact arclength integrals: uneven tessellation cannot bias the fitted plane.
+    for(size_t i=0;i<ring.size();++i){const auto& a=ring[i];const auto& b=ring[(i+1)%ring.size()];
+        const double l=(b-a).norm();perimeter+=l;out.center+=l*(a+b)/2;}
+    if(!std::isfinite(perimeter) || perimeter<eps)return reject("degenerate_boundary_length");
+    out.center/=perimeter;
+    Eigen::Matrix3d covariance=Eigen::Matrix3d::Zero();
+    for(size_t i=0;i<ring.size();++i){const V3 a=ring[i]-out.center,b=ring[(i+1)%ring.size()]-out.center;
+        covariance+=(b-a).norm()*((a*a.transpose()+b*b.transpose())/3+(a*b.transpose()+b*a.transpose())/6)/perimeter;}
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> eig(covariance);
+    if(eig.info()!=Eigen::Success || !eig.eigenvalues().allFinite() || eig.eigenvalues()[1]<1e-12)
+        return reject("degenerate_boundary_plane");
+    out.normal=eig.eigenvectors().col(0);out.axisX=eig.eigenvectors().col(2);
+    for(V3* axis:{&out.normal,&out.axisX}){Eigen::Index k;axis->cwiseAbs().maxCoeff(&k);if((*axis)[k]<0)*axis=-*axis;}
+    out.axisY=out.normal.cross(out.axisX).normalized();
+    out.rmsResidual=std::sqrt(std::max(0.,eig.eigenvalues()[0]));
+    std::vector<V2> polygon;
+    for(const auto& p:ring){const V3 d=p-out.center;out.maxResidual=std::max(out.maxResidual,std::abs(out.normal.dot(d)));polygon.emplace_back(out.axisX.dot(d),out.axisY.dot(d));}
+    // Maximum covers every original vertex, including narrow spikes between samples.
+    if(out.maxResidual>maxFitResidual)return reject("nonplanar_selected_boundary: fit maximum residual exceeds configured tolerance");
+    const auto onSegment=[](const V2& p,const V2& a,const V2& b){const V2 e=b-a;const double t=std::clamp((p-a).dot(e)/e.squaredNorm(),0.,1.);return (p-a-t*e).norm()<=1e-9;};
+    double area=0;
+    for(size_t i=0;i<polygon.size();++i){const auto& a=polygon[i];const auto& b=polygon[(i+1)%polygon.size()];
+        if((b-a).norm()<=1e-9)return reject("degenerate_projected_boundary_edge");
+        area+=cross(a,b);
+        const V2 previous=a-polygon[(i+polygon.size()-1)%polygon.size()],next=b-a;
+        if(std::abs(cross(previous,next))<=1e-9*std::max(previous.norm(),next.norm()) && previous.dot(next)<0)
+            return reject("overlapping_projected_boundary_edges");
+    }
+    if(std::abs(area)<=1e-12)return reject("degenerate_projected_boundary_area");
+    for(size_t i=0;i<polygon.size();++i)for(size_t j=i+1;j<polygon.size();++j){
+        if(j==i+1 || (i==0 && j+1==polygon.size()))continue;
+        const auto &a=polygon[i],&b=polygon[(i+1)%polygon.size()],&c=polygon[j],&d=polygon[(j+1)%polygon.size()];
+        if(a.cwiseMin(b).x()>c.cwiseMax(d).x()+1e-9 || c.cwiseMin(d).x()>a.cwiseMax(b).x()+1e-9 ||
+           a.cwiseMin(b).y()>c.cwiseMax(d).y()+1e-9 || c.cwiseMin(d).y()>a.cwiseMax(b).y()+1e-9)continue;
+        const double c1=cross(b-a,c-a),c2=cross(b-a,d-a),c3=cross(d-c,a-c),c4=cross(d-c,b-c);
+        if(((c1>0 && c2<0)||(c1<0 && c2>0)) && ((c3>0 && c4<0)||(c3<0 && c4>0)))return reject("self_intersecting_projected_boundary");
+        if(onSegment(a,c,d)||onSegment(b,c,d)||onSegment(c,a,b)||onSegment(d,a,b))return reject("touching_projected_boundary");
+    }
+    out.contours.push_back(std::move(polygon));out.enabled=true;
+    out.diagnostic="enabled: nearest world-origin closed boundary, fitted plane minus projected boundary interior";
+    return out;
 }
 VirtualBaffle buildVirtualBaffle(const ModelData& model,double thickness,double maxFitResidual){
     VirtualBaffle out;out.thickness=thickness;
