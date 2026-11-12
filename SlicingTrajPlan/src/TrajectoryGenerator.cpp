@@ -581,7 +581,6 @@ namespace ModelTrajPlan
                 }
 
                 Eigen::Vector3d layerReference = point - layerCenters[layerIndex];
-                if (trajParams.offsetDistance < 0.0) layerReference = -layerReference;
                 const bool hasLayerReference = layerReference.allFinite() &&
                     layerReference.norm() > 1e-8;
                 double referenceDot = hasLayerReference
@@ -591,7 +590,6 @@ namespace ModelTrajPlan
                 // global fallback.  They do not contribute to the layer fit.
                 if (!hasLayerReference || std::abs(referenceDot) < referenceStrength) {
                     Eigen::Vector3d globalReference = point - modelCenter;
-                    if (trajParams.offsetDistance < 0.0) globalReference = -globalReference;
                     if (globalReference.allFinite() && globalReference.norm() > 1e-8) {
                         referenceDot = surfaceNormal.dot(globalReference.normalized());
                     }
@@ -628,6 +626,10 @@ namespace ModelTrajPlan
             }
 
             const std::vector<Eigen::Vector3d>& layerPoints = sampledPoints[trajectoryIndex];
+            const double layerDistance = trajectoryIndex < static_cast<int>(trajParams.layerSprayDistances.size()) &&
+                trajectoryIndex < static_cast<int>(trajParams.layerSprayDistanceFollowGlobal.size()) &&
+                !trajParams.layerSprayDistanceFollowGlobal[trajectoryIndex]
+                ? trajParams.layerSprayDistances[trajectoryIndex] : trajParams.offsetDistance;
             if (trajParams.previewFirstPoint && trajectoryIndex > 0) break;
 
             // Alternate traversal from the chosen initial boundary, keeping
@@ -716,8 +718,27 @@ namespace ModelTrajPlan
                 // 5. The tool position is offset opposite to its pose normal.
                 // The distance sign has already selected the normal direction
                 // above, so use only its magnitude here.
-                Eigen::Vector3d offsetPos = point - surfaceNormal *
-                    std::abs(trajParams.offsetDistance);
+                // Keep the configured distance signed.  The surface point is
+                // the fixed spray target; the TCP is placed on the normal at
+                // the requested signed distance from that target.
+                const size_t lowerBoundaryIndex = trajParams.z1Offset != 0.0 ? 1u : 0u;
+                const size_t upperBoundaryIndex = layerPoints.size() - 1u -
+                    (trajParams.z2Offset != 0.0 ? 1u : 0u);
+                // Physical boundary points override the layer distance.  A
+                // boundary that still follows the global value uses the
+                // global distance; a detached boundary keeps its own signed
+                // value.  The sign only moves TCP along the fixed normal and
+                // never flips the normal/orientation itself.
+                double pointDistance = layerDistance;
+                if (pointIndex == lowerBoundaryIndex) {
+                    pointDistance = trajParams.lowerBoundaryFollowGlobalSprayDistance
+                        ? trajParams.offsetDistance : trajParams.lowerBoundarySprayDistance;
+                } else if (pointIndex == upperBoundaryIndex) {
+                    pointDistance = trajParams.upperBoundaryFollowGlobalSprayDistance
+                        ? trajParams.offsetDistance : trajParams.upperBoundarySprayDistance;
+                }
+                if (!std::isfinite(pointDistance)) return false;
+                Eigen::Vector3d offsetPos = point - surfaceNormal * pointDistance;
                 Eigen::Vector3d zAxis = surfaceNormal;
 
                 // 6. Build the right-handed frame: X follows travel, Z is
@@ -741,17 +762,12 @@ namespace ModelTrajPlan
 
                 trajPoint.velocity = trajParams.normalVelocity;
                 trajPoint.acceleration = trajParams.acceleration;
-                const size_t lowerBoundaryIndex = trajParams.z1Offset != 0.0 ? 1u : 0u;
-                const size_t upperBoundaryIndex = layerPoints.size() - 1u -
-                    (trajParams.z2Offset != 0.0 ? 1u : 0u);
                 const bool offsetPoint = (pointIndex == 0 && trajParams.z1Offset != 0.0) ||
                     (pointIndex + 1 == layerPoints.size() && trajParams.z2Offset != 0.0);
                 trajPoint.point_type = offsetPoint ? 2 :
                     (pointIndex == lowerBoundaryIndex || pointIndex == upperBoundaryIndex ? 1 : 0);
-                // spray_distance is a physical nozzle-to-surface length. The
-                // offset sign selects the pose direction, never a negative
-                // propagation distance for the thickness model.
-                trajPoint.spray_distance = std::abs(trajParams.offsetDistance);
+                // Preserve the signed TCP-to-target distance in metadata.
+                trajPoint.spray_distance = pointDistance;
 
                 // Write indices
                 trajPoint.trajectory_index = trajectoryIndex;
@@ -832,7 +848,7 @@ namespace ModelTrajPlan
                 const bool normalOffset = isLower ? trajParams.lowerTransitionNormalOffset : trajParams.upperTransitionNormalOffset;
                 const bool followDistance = isLower ? trajParams.lowerTransitionFollowSprayDistance : trajParams.upperTransitionFollowSprayDistance;
                 const double customDistance = isLower ? trajParams.lowerTransitionSprayDistance : trajParams.upperTransitionSprayDistance;
-                const double distance = normalOffset ? std::abs(followDistance ? trajParams.offsetDistance : customDistance) : 0.0;
+                const double distance = normalOffset ? (followDistance ? trajParams.offsetDistance : customDistance) : 0.0;
                 if(!std::isfinite(distance)) return false;
                 position -= distance * rotation.col(2);
                 point.pose.block<3, 3>(0, 0) = rotation;

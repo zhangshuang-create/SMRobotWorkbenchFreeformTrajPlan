@@ -247,6 +247,10 @@ namespace ModelTrajPlan
             b["lower_boundary"] = boundaryLineToJson(generalData_.boundaryData_.lowerBoundary_);
             b["upper_boundary_offset"] = boundaryLineToJson(generalData_.boundaryData_.upperBoundaryOffset_);
             b["lower_boundary_offset"] = boundaryLineToJson(generalData_.boundaryData_.lowerBoundaryOffset_);
+            b["upper_boundary_follow_global_spray_distance"] = generalData_.boundaryData_.upperBoundaryFollowGlobalSprayDistance_;
+            b["lower_boundary_follow_global_spray_distance"] = generalData_.boundaryData_.lowerBoundaryFollowGlobalSprayDistance_;
+            b["upper_boundary_spray_distance"] = generalData_.boundaryData_.upperBoundarySprayDistance_;
+            b["lower_boundary_spray_distance"] = generalData_.boundaryData_.lowerBoundarySprayDistance_;
             b["boundary_lines"] = nlohmann::json::array();
             for (const auto& line : generalData_.boundaryData_.boundaryLines_)
             {
@@ -310,6 +314,8 @@ namespace ModelTrajPlan
                 cpNode["rotation_y"] = cp.rotation_y;
                 cpNode["rotation_z"] = cp.rotation_z;
                 cpNode["is_selected"] = cp.isSelected;
+                cpNode["follow_global_spray_distance"] = cp.followGlobalSprayDistance;
+                cpNode["spray_distance"] = cp.sprayDistance;
                 cpNode["vertices"] = nlohmann::json::array();
                 for (const auto& v : cp.vertices)
                 {
@@ -450,6 +456,8 @@ namespace ModelTrajPlan
                     if (item.contains("rotation_y")) cp.rotation_y = item["rotation_y"].get<double>();
                     if (item.contains("rotation_z")) cp.rotation_z = item["rotation_z"].get<double>();
                     if (item.contains("is_selected")) cp.isSelected = item["is_selected"].get<bool>();
+                    if (item.contains("follow_global_spray_distance")) cp.followGlobalSprayDistance = item["follow_global_spray_distance"].get<bool>();
+                    if (item.contains("spray_distance")) cp.sprayDistance = item["spray_distance"].get<double>();
                     if (item.contains("vertices") && item["vertices"].is_array())
                     {
                         cp.vertices.clear();
@@ -473,6 +481,10 @@ namespace ModelTrajPlan
             if (b.contains("lower_boundary")) jsonToBoundaryLine(b["lower_boundary"], generalData_.boundaryData_.lowerBoundary_);
             if (b.contains("upper_boundary_offset")) jsonToBoundaryLine(b["upper_boundary_offset"], generalData_.boundaryData_.upperBoundaryOffset_);
             if (b.contains("lower_boundary_offset")) jsonToBoundaryLine(b["lower_boundary_offset"], generalData_.boundaryData_.lowerBoundaryOffset_);
+            if (b.contains("upper_boundary_follow_global_spray_distance")) generalData_.boundaryData_.upperBoundaryFollowGlobalSprayDistance_ = b["upper_boundary_follow_global_spray_distance"].get<bool>();
+            if (b.contains("lower_boundary_follow_global_spray_distance")) generalData_.boundaryData_.lowerBoundaryFollowGlobalSprayDistance_ = b["lower_boundary_follow_global_spray_distance"].get<bool>();
+            if (b.contains("upper_boundary_spray_distance")) generalData_.boundaryData_.upperBoundarySprayDistance_ = b["upper_boundary_spray_distance"].get<double>();
+            if (b.contains("lower_boundary_spray_distance")) generalData_.boundaryData_.lowerBoundarySprayDistance_ = b["lower_boundary_spray_distance"].get<double>();
             if (b.contains("boundary_lines") && b["boundary_lines"].is_array())
             {
                 generalData_.boundaryData_.boundaryLines_.clear();

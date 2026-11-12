@@ -1,6 +1,7 @@
 #include <SlicingTrajPlan/BurTrajPlan.h>
 #include <SlicingTrajPlan/TrajectoryGenerator.h>
 #include <algorithm>
+#include <numeric>
 #include <iostream>
 #include <cmath>
 #include <memory>
@@ -193,6 +194,47 @@ namespace ModelTrajPlan
                       << ", minStep=" << params.minStep
                       << std::endl;
             return false;
+        }
+
+        // The slicer may return planes in traversal/Z order.  The public
+        // meaning of a layer is geometric: layer 0 is the slice nearest the
+        // world origin and subsequent layers move away from it.  Reorder all
+        // parallel containers with one permutation so a layer's contour,
+        // pose, spray-distance override and follow-global flag remain bound
+        // to the same geometry.
+        const size_t planeCount = generalData.slicingData_.cuttingPlanes_.size();
+        if (planeCount == sliceResult.internalBoundaries.size() &&
+            planeCount == generalData.slicingData_.slicingLocations_.size() &&
+            planeCount > 1) {
+            std::vector<size_t> order(planeCount);
+            std::iota(order.begin(), order.end(), 0);
+            std::stable_sort(order.begin(), order.end(), [&](size_t lhs, size_t rhs) {
+                const double left = generalData.slicingData_.cuttingPlanes_[lhs].center.squaredNorm();
+                const double right = generalData.slicingData_.cuttingPlanes_[rhs].center.squaredNorm();
+                if (std::abs(left - right) > 1e-12) return left < right;
+                return lhs < rhs;
+            });
+
+            auto oldPlanes = std::move(generalData.slicingData_.cuttingPlanes_);
+            auto oldBoundaries = std::move(sliceResult.internalBoundaries);
+            auto oldLocations = std::move(generalData.slicingData_.slicingLocations_);
+            generalData.slicingData_.cuttingPlanes_.reserve(planeCount);
+            sliceResult.internalBoundaries.reserve(planeCount);
+            generalData.slicingData_.slicingLocations_.reserve(planeCount);
+            for (size_t newIndex = 0; newIndex < planeCount; ++newIndex) {
+                const size_t oldIndex = order[newIndex];
+                auto plane = std::move(oldPlanes[oldIndex]);
+                plane.layer_index = static_cast<int>(newIndex);
+                generalData.slicingData_.cuttingPlanes_.push_back(std::move(plane));
+                sliceResult.internalBoundaries.push_back(std::move(oldBoundaries[oldIndex]));
+                generalData.slicingData_.slicingLocations_.push_back(std::move(oldLocations[oldIndex]));
+            }
+        } else {
+            // Keep indices contiguous even for a custom/degenerate slicer
+            // result; this also prevents stale layer numbers in the editor.
+            for (size_t i = 0; i < planeCount; ++i) {
+                generalData.slicingData_.cuttingPlanes_[i].layer_index = static_cast<int>(i);
+            }
         }
 
         // 6. Store slice result
@@ -531,6 +573,21 @@ namespace ModelTrajPlan
             trajParams.z1Offset = z1Offset;
             trajParams.z2Offset = z2Offset;
             trajParams.offsetDistance = offsetDistance;
+            trajParams.layerSprayDistances.clear();
+            trajParams.layerSprayDistanceFollowGlobal.clear();
+            for (const auto& plane : generalData.slicingData_.cuttingPlanes_) {
+                trajParams.layerSprayDistances.push_back(plane.sprayDistance);
+                trajParams.layerSprayDistanceFollowGlobal.push_back(plane.followGlobalSprayDistance);
+            }
+            // Transition-point distance is configured independently in the
+            // trajectory-frame dialog and must not be overwritten by the
+            // physical boundary-point settings from the slicing table.
+            trajParams.upperBoundaryFollowGlobalSprayDistance =
+                generalData.boundaryData_.upperBoundaryFollowGlobalSprayDistance_;
+            trajParams.lowerBoundaryFollowGlobalSprayDistance =
+                generalData.boundaryData_.lowerBoundaryFollowGlobalSprayDistance_;
+            trajParams.upperBoundarySprayDistance = generalData.boundaryData_.upperBoundarySprayDistance_;
+            trajParams.lowerBoundarySprayDistance = generalData.boundaryData_.lowerBoundarySprayDistance_;
 
             // Use safe defaults if velocities are not set
             if (trajParams.normalVelocity == 0.0) {

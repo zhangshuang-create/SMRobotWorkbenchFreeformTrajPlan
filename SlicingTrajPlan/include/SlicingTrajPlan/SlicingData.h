@@ -30,6 +30,12 @@ namespace ModelTrajPlan
         // [Addition] Whether selected for highlight
         bool isSelected = false;
 
+        // Spray stand-off for this layer.  A layer follows the global
+        // trajectory distance by default; when disabled sprayDistance is
+        // used verbatim (signed, zero is valid).
+        bool followGlobalSprayDistance = true;
+        double sprayDistance = 0.0;
+
         // Constructor: initialize vertex array
         CuttingPlane() {
             vertices.resize(4);  // Pre-allocate 4 vertices
