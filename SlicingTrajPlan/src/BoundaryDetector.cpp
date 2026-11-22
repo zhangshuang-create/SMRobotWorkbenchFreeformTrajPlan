@@ -1514,6 +1514,22 @@ bool PairOfVector3dCompare::operator()(const std::pair<Eigen::Vector3d, Eigen::V
                 fillBoundary(boundaryLoops.back(), boundaryData.upperBoundary_,
                     Eigen::Vector3f(1.0f, 0.0f, 0.0f), "Upper Boundary",
                     BoundaryLineType::UpperBoundary);
+
+                // Normalize semantic ordering by distance of the fitted
+                // boundary centers from the origin.  Mesh traversal order is
+                // not stable, so the physical boundary nearest the origin is
+                // always exposed as lower.  Swap the paired offset lines and
+                // per-boundary spray settings together with the main lines;
+                // swapping the BoundaryLine values also carries type/name.
+                if (boundaryData.lowerBoundary_.center.norm() >
+                    boundaryData.upperBoundary_.center.norm()) {
+                    std::swap(boundaryData.lowerBoundary_, boundaryData.upperBoundary_);
+                    std::swap(boundaryData.lowerBoundaryOffset_, boundaryData.upperBoundaryOffset_);
+                    std::swap(boundaryData.lowerBoundaryFollowGlobalSprayDistance_,
+                              boundaryData.upperBoundaryFollowGlobalSprayDistance_);
+                    std::swap(boundaryData.lowerBoundarySprayDistance_,
+                              boundaryData.upperBoundarySprayDistance_);
+                }
             }
 
             if(topology) return !boundaryData.upperBoundary_.points.empty() && !boundaryData.lowerBoundary_.points.empty();

@@ -1,3 +1,0 @@
-[submodule "UVTrajPlan/optcut/ext/tbb"]
-	path = UVTrajPlan/optcut/ext/tbb
-	url = https://github.com/wjakob/tbb.git

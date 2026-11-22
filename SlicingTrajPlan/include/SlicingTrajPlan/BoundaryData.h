@@ -109,6 +109,13 @@ namespace ModelTrajPlan
         BoundaryLine upperBoundaryOffset_;     // Upper boundary offset line
         BoundaryLine lowerBoundaryOffset_;     // Lower boundary offset line
 
+        // Independent signed spray distances for the physical boundary
+        // points.  Follow flags preserve the global-distance default.
+        bool upperBoundaryFollowGlobalSprayDistance_ = true;
+        bool lowerBoundaryFollowGlobalSprayDistance_ = true;
+        double upperBoundarySprayDistance_ = 0.0;
+        double lowerBoundarySprayDistance_ = 0.0;
+
         // Boundary range data
         double z_max_boundary_;                // Max Z boundary
         double z_min_boundary_;                // Min Z boundary

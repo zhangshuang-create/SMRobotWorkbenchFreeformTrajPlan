@@ -177,6 +177,25 @@ bool UniformSlicer::performSlicing(const ModelData& modelData,
         } else {
             sliceResult.internalBoundaries = generateInternalBoundaries(modelData, params, zMin, zMax, slicingLocations);
         }
+        // Keep layer indices in physical order: nearest slice center to the
+        // origin first, regardless of whether Z/custom positions were entered
+        // in another order. Reorder locations and contours together so every
+        // layer-bound parameter remains attached to its geometry.
+        if (sliceResult.internalBoundaries.size() == slicingLocations.size() &&
+            slicingLocations.size() > 1) {
+            std::vector<std::size_t> order(slicingLocations.size());
+            std::iota(order.begin(), order.end(), std::size_t{0});
+            std::stable_sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
+                return slicingLocations[a].point.squaredNorm() <
+                    slicingLocations[b].point.squaredNorm();
+            });
+            const auto oldLocations = slicingLocations;
+            const auto oldBoundaries = sliceResult.internalBoundaries;
+            for (std::size_t i = 0; i < order.size(); ++i) {
+                slicingLocations[i] = oldLocations[order[i]];
+                sliceResult.internalBoundaries[i] = oldBoundaries[order[i]];
+            }
+        }
         if (sliceResult.internalBoundaries.size() != slicingLocations.size()) {
             if (cuttingPlanes) cuttingPlanes->clear();
             return false;
@@ -186,6 +205,7 @@ bool UniformSlicer::performSlicing(const ModelData& modelData,
         if (cuttingPlanes && !sliceResult.internalBoundaries.empty()) {
             cuttingPlanes->clear();
             cuttingPlanes->reserve(sliceResult.internalBoundaries.size());
+            std::vector<bool> oldPlaneUsed(oldCuttingPlanes ? oldCuttingPlanes->size() : 0, false);
             
             // 娑撶儤鐦℃稉顏囩珶閻ｅ瞼鏁撻幋鎰娑擃亜鐔€绾偓閻?CuttingPlane
             for (size_t i = 0; i < sliceResult.internalBoundaries.size(); ++i) {
@@ -266,13 +286,33 @@ bool UniformSlicer::performSlicing(const ModelData& modelData,
                 plane.vertices[3] = plane.center + localX * minLocalX + localY * maxLocalY;
                 
                 // 娣囨繄鏆€閺冄呮畱閸欐ɑ宕查崣鍌涙殶閿涘牆顩ч弸婊冪摠閸︻煉绱?
-                if (oldCuttingPlanes && oldCuttingPlanes->size() > i) {
-                    plane.translation_x = (*oldCuttingPlanes)[i].translation_x;
-                    plane.translation_y = (*oldCuttingPlanes)[i].translation_y;
-                    plane.translation_z = (*oldCuttingPlanes)[i].translation_z;
-                    plane.rotation_x = (*oldCuttingPlanes)[i].rotation_x;
-                    plane.rotation_y = (*oldCuttingPlanes)[i].rotation_y;
-                    plane.rotation_z = (*oldCuttingPlanes)[i].rotation_z;
+                if (oldCuttingPlanes && !oldCuttingPlanes->empty()) {
+                    // Match each regenerated layer to at most one previous
+                    // layer by geometric center. This keeps pose and the
+                    // signed spray-distance override attached to its layer
+                    // after reordering or a changed layer count.
+                    size_t nearestIndex = oldCuttingPlanes->size();
+                    double nearestDistance = std::numeric_limits<double>::max();
+                    for (size_t oldIndex = 0; oldIndex < oldCuttingPlanes->size(); ++oldIndex) {
+                        if (oldPlaneUsed[oldIndex]) continue;
+                        const double distance = ((*oldCuttingPlanes)[oldIndex].center - plane.center).squaredNorm();
+                        if (distance < nearestDistance) {
+                            nearestDistance = distance;
+                            nearestIndex = oldIndex;
+                        }
+                    }
+                    if (nearestIndex < oldCuttingPlanes->size()) {
+                        oldPlaneUsed[nearestIndex] = true;
+                        const auto& previous = (*oldCuttingPlanes)[nearestIndex];
+                        plane.translation_x = previous.translation_x;
+                        plane.translation_y = previous.translation_y;
+                        plane.translation_z = previous.translation_z;
+                        plane.rotation_x = previous.rotation_x;
+                        plane.rotation_y = previous.rotation_y;
+                        plane.rotation_z = previous.rotation_z;
+                        plane.sprayDistance = previous.sprayDistance;
+                        plane.followGlobalSprayDistance = previous.followGlobalSprayDistance;
+                    }
                 }
                 
                 cuttingPlanes->push_back(plane);

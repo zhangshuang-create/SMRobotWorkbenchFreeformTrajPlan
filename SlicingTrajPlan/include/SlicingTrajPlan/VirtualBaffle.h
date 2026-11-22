@@ -19,4 +19,14 @@ struct VirtualBaffle {
 };
 VirtualBaffle buildVirtualBaffle(const ModelData& modelInMetres,
     double thickness=0.001, double maxFitResidual=0.005);
+struct NearestBoundaryBaffle : VirtualBaffle {
+    int selectedBoundary=-1;
+    double selectedBoundaryDistance=0;
+    size_t selectedBoundaryPointCount=0;
+};
+// Geometry stays workpiece-local. Pass T_world_object.inverse()*worldOrigin
+// after applying mesh scale. Rigid transforms preserve point/segment distances.
+NearestBoundaryBaffle buildNearestBoundaryBaffle(const ModelData& modelInMetres,
+    const Eigen::Vector3d& worldOriginInObject=Eigen::Vector3d::Zero(),
+    double thickness=0.001, double maxFitResidual=0.100);
 }

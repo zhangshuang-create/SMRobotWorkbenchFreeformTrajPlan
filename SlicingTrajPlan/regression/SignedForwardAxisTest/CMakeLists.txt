@@ -1,0 +1,4 @@
+add_executable(FreeformTrajPlanSignedForwardAxisTest main.cpp)
+target_link_libraries(FreeformTrajPlanSignedForwardAxisTest PRIVATE SMRobotSpray::SprayFreeformTrajPlan)
+target_compile_features(FreeformTrajPlanSignedForwardAxisTest PRIVATE cxx_std_17)
+add_test(NAME FreeformTrajPlanSignedForwardAxisTest COMMAND $<TARGET_FILE:FreeformTrajPlanSignedForwardAxisTest>)
