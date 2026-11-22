@@ -34,6 +34,34 @@ namespace
 
 namespace ModelTrajPlan
 {
+    namespace {
+        Eigen::Matrix3d exportRotationPreservingZ(const Eigen::Matrix3d& raw)
+        {
+            Eigen::Vector3d x = raw.col(0);
+            Eigen::Vector3d z = raw.col(2);
+            if (!z.allFinite() || z.norm() <= 1e-10) z = Eigen::Vector3d::UnitZ();
+            z.normalize();
+            if (!x.allFinite() || x.norm() <= 1e-10) {
+                x = std::abs(z.z()) < 0.9
+                    ? Eigen::Vector3d::UnitZ() : Eigen::Vector3d::UnitY();
+            }
+            x -= z * z.dot(x);
+            if (x.norm() <= 1e-10) {
+                x = std::abs(z.z()) < 0.9 ? Eigen::Vector3d::UnitZ() : Eigen::Vector3d::UnitY();
+                x -= z * z.dot(x);
+            }
+            if (x.norm() <= 1e-10) return Eigen::Matrix3d::Identity();
+            x.normalize();
+            Eigen::Vector3d y = z.cross(x);
+            if (y.norm() <= 1e-10) return Eigen::Matrix3d::Identity();
+            y.normalize();
+            x = y.cross(z).normalized();
+            Eigen::Matrix3d result;
+            result.col(0) = x; result.col(1) = y; result.col(2) = z;
+            return result;
+        }
+    }
+
     TrajectoryExporter::TrajectoryExporter()
     {
     }
@@ -444,10 +472,13 @@ namespace ModelTrajPlan
 
     Eigen::Quaterniond TrajectoryExporter::extractQuaternion(const Eigen::Matrix4d& pose)
     {
-        // Extract quaternion from rotation matrix
-        Eigen::Matrix3d rotationMatrix = pose.block<3, 3>(0, 0);
-        Eigen::Quaterniond quaternion(rotationMatrix);
-        return quaternion;
+        // Repair the frame before conversion.  Fixed-forward modes preserve
+        // X independently from the sampled normal, so the raw columns may be
+        // slightly non-orthogonal; converting that raw matrix directly can
+        // produce a non-unit quaternion and make PAQ/TXT unloadable.
+        const Eigen::Matrix3d rotationMatrix = exportRotationPreservingZ(
+            pose.block<3, 3>(0, 0));
+        return Eigen::Quaterniond(rotationMatrix).normalized();
     }
 
 }

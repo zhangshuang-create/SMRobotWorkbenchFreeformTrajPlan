@@ -32,6 +32,16 @@ namespace ModelTrajPlan
     struct TrajectoryGenerationParams {
         int normalAxis = 4;
         int forwardAxis = 0;
+        // 0: sampled surface normal; 1: project the normal onto the
+        // horizontal (XY) plane at the control point; 2: limit deviation from
+        // that projection to the mean angle for the current trajectory.
+        int normalDirectionMode = 0;
+        // 0: use the current segment direction; 1: use one averaged
+        // forward direction for the complete generated trajectory; 2: use
+        // the direction from the lower boundary toward the upper boundary.
+        int forwardDirectionMode = 0;
+        // Sign for mode 2: +1 points from lower to upper boundary.
+        int boundaryNormalDirectionSign = 1;
         bool previewFirstPoint = false;
         bool upperTransitionSmoothPose = false;
         bool lowerTransitionSmoothPose = false;

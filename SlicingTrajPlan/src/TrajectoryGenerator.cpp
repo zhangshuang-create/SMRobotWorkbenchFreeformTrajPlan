@@ -18,6 +18,18 @@
 #endif
 namespace ModelTrajPlan
 {
+    static Eigen::Vector3d horizontalNormalReference(const Eigen::Vector3d& normal)
+    {
+        const Eigen::Vector3d horizontal(normal.x(), normal.y(), 0.0);
+        if (horizontal.norm() > 1e-8) return horizontal.normalized();
+        return Eigen::Vector3d::UnitX();
+    }
+
+    static double normalDeviation(const Eigen::Vector3d& normal, const Eigen::Vector3d& reference)
+    {
+        return std::atan2(reference.cross(normal).norm(), reference.dot(normal));
+    }
+
     // Fallback contours have no skeleton seam. Open lines must never gain
     // an artificial closing segment; closed rings also match their phase.
     static std::vector<std::vector<Eigen::Vector3d>> sampleFallbackContours(
@@ -619,6 +631,55 @@ namespace ModelTrajPlan
             }
         }
 
+        // In boundary-normal mode, calculate the normal of the complete lower
+        // boundary plane.  The lower-to-upper geometry only selects its sign.
+        Eigen::Vector3d boundaryNormalTravel = Eigen::Vector3d::Zero();
+        if (trajParams.forwardDirectionMode == 2) {
+            const size_t lowerIndex = trajParams.z1Offset != 0.0 ? 1u : 0u;
+            const size_t upperIndexOffset = trajParams.z2Offset != 0.0 ? 1u : 0u;
+            std::vector<Eigen::Vector3d> lowerBoundaryPoints;
+            Eigen::Vector3d lowerToUpper = Eigen::Vector3d::Zero();
+            for (const auto& points : sampledPoints) {
+                if (points.size() <= lowerIndex + upperIndexOffset || lowerIndex >= points.size()) continue;
+                const size_t upperIndex = points.size() - 1u - upperIndexOffset;
+                lowerBoundaryPoints.push_back(points[lowerIndex]);
+                const Eigen::Vector3d delta = points[upperIndex] - points[lowerIndex];
+                if (delta.allFinite() && delta.norm() > 1e-8) lowerToUpper += delta.normalized();
+            }
+            if (lowerBoundaryPoints.size() >= 3) {
+                Eigen::Vector3d center = Eigen::Vector3d::Zero();
+                for (const auto& point : lowerBoundaryPoints) center += point;
+                center /= static_cast<double>(lowerBoundaryPoints.size());
+                Eigen::Matrix3d covariance = Eigen::Matrix3d::Zero();
+                for (const auto& point : lowerBoundaryPoints) {
+                    const Eigen::Vector3d d = point - center;
+                    covariance.noalias() += d * d.transpose();
+                }
+                Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> solver(covariance);
+                if (solver.info() == Eigen::Success) {
+                    const auto eigenvalues = solver.eigenvalues();
+                    // A line-like lower boundary does not determine a unique
+                    // plane normal: its two small PCA eigenvalues make the
+                    // smallest eigenvector numerically arbitrary.  In that
+                    // case use the known model-Z normal instead of a tilted
+                    // PCA artifact.
+                    const bool planeDetermined = eigenvalues(2) > 1e-12 &&
+                        eigenvalues(1) > eigenvalues(2) * 1e-6;
+                    if (planeDetermined) {
+                        boundaryNormalTravel = solver.eigenvectors().col(0);
+                        if (!boundaryNormalTravel.allFinite() || boundaryNormalTravel.norm() <= 1e-8)
+                            boundaryNormalTravel.setZero();
+                    }
+                }
+            }
+            if (lowerToUpper.norm() > 1e-8) {
+                if (boundaryNormalTravel.norm() <= 1e-8) boundaryNormalTravel = Eigen::Vector3d::UnitZ();
+                if (boundaryNormalTravel.dot(lowerToUpper) < 0.0) boundaryNormalTravel = -boundaryNormalTravel;
+            }
+            if (boundaryNormalTravel.norm() <= 1e-8) boundaryNormalTravel = Eigen::Vector3d::UnitZ();
+            if (trajParams.boundaryNormalDirectionSign < 0) boundaryNormalTravel = -boundaryNormalTravel;
+        }
+
         // Generate points for each trajectory
         for (int trajectoryIndex = 0; trajectoryIndex < numTrajectories; ++trajectoryIndex) {
             if (trajectoryIndex >= static_cast<int>(sampledPoints.size())) {
@@ -632,6 +693,20 @@ namespace ModelTrajPlan
                 ? trajParams.layerSprayDistances[trajectoryIndex] : trajParams.offsetDistance;
             if (trajParams.previewFirstPoint && trajectoryIndex > 0) break;
 
+            double meanNormalDeviation = 0.0;
+            if (trajParams.normalDirectionMode == 2 && !layerPoints.empty()) {
+                // Empty-run points borrow a physical boundary normal and do not vote twice.
+                const bool hasOffsetLayers = layerPoints.size() >= 3;
+                const size_t first = hasOffsetLayers && trajParams.z1Offset != 0.0 ? 1u : 0u;
+                const size_t end = layerPoints.size() -
+                    (hasOffsetLayers && trajParams.z2Offset != 0.0 ? 1u : 0u);
+                for (size_t index = first; index < end; ++index) {
+                    const auto& normal = baseNormals[trajectoryIndex][index];
+                    meanNormalDeviation += normalDeviation(normal, horizontalNormalReference(normal));
+                }
+                meanNormalDeviation /= static_cast<double>(end - first);
+            }
+
             // Alternate traversal from the chosen initial boundary, keeping
             // the seam column first and the remaining columns serpentine.
             bool reverseDirection = (trajectoryIndex % 2 == 1) != startFromUpper;
@@ -642,6 +717,19 @@ namespace ModelTrajPlan
             // rotate between layers.  Without this state a single ambiguous
             // STL face can produce an isolated 180-degree pose flip.
             Eigen::Vector3d previousNormal = Eigen::Vector3d::Zero();
+
+            // In global-average mode, derive one travel vector from the
+            // complete stored path order.  The vector is intentionally based
+            // on positions only; each point later projects it onto its own
+            // surface tangent plane.
+            Eigen::Vector3d globalTravel = Eigen::Vector3d::Zero();
+            if (trajParams.forwardDirectionMode == 1 && layerPoints.size() >= 2) {
+                for (size_t segmentIndex = 0; segmentIndex + 1 < layerPoints.size(); ++segmentIndex) {
+                    const Eigen::Vector3d segment = layerPoints[segmentIndex + 1] - layerPoints[segmentIndex];
+                    if (segment.allFinite() && segment.norm() > 1e-8) globalTravel += segment.normalized();
+                }
+            }
+            if (globalTravel.norm() <= 1e-8) globalTravel = Eigen::Vector3d::UnitX();
 
             for (size_t i = 0; i < layerPoints.size(); ++i) {
                 // A first offset point also needs the physical boundary pose.
@@ -690,30 +778,72 @@ namespace ModelTrajPlan
                         surfaceNormal = -surfaceNormal;
                     }
                 }
+                const Eigen::Vector3d precedingNormal = previousNormal;
                 previousNormal = surfaceNormal;
+                if (trajParams.normalDirectionMode == 1) {
+                    // Choose the surface side in 3D before discarding the vertical component.
+                    surfaceNormal.z() = 0.0;
+                    if (surfaceNormal.norm() <= 1e-8) {
+                        surfaceNormal = precedingNormal;
+                        surfaceNormal.z() = 0.0;
+                        if (surfaceNormal.norm() <= 1e-8) {
+                            surfaceNormal = layerReference;
+                            surfaceNormal.z() = 0.0;
+                        }
+                        if (surfaceNormal.norm() <= 1e-8) {
+                            std::cerr << "Horizontal spray direction undefined at trajectory " << trajectoryIndex
+                                      << ", layer " << pointIndex << '\n';
+                            return false;
+                        }
+                    }
+                    surfaceNormal.normalize();
+                }
+                if (trajParams.normalDirectionMode == 2) {
+                    const Eigen::Vector3d reference = horizontalNormalReference(surfaceNormal);
+                    if (normalDeviation(surfaceNormal, reference) > meanNormalDeviation) {
+                        const Eigen::Vector3d tangent =
+                            (surfaceNormal - reference * reference.dot(surfaceNormal)).normalized();
+                        surfaceNormal = (std::cos(meanNormalDeviation) * reference +
+                            std::sin(meanNormalDeviation) * tangent).normalized();
+                    }
+                }
 
                 // 2. X follows the first stroke from the chosen initial
                 // boundary. Layer storage order can oppose that stroke when
                 // the nearest endpoint is the supplied upper boundary.
                 // Keep this reference on return strokes as well.
                 Eigen::Vector3d xAxis = Eigen::Vector3d::UnitX();
-                if(pointIndex + 1 < layerPoints.size()) {
+                if (trajParams.forwardDirectionMode == 2) {
+                    xAxis = boundaryNormalTravel;
+                } else if (trajParams.forwardDirectionMode == 1) {
+                    xAxis = globalTravel;
+                } else if(pointIndex + 1 < layerPoints.size()) {
                     xAxis = layerPoints[pointIndex + 1] - point;
                 } else if(pointIndex > 0) {
                     xAxis = point - layerPoints[pointIndex - 1];
                 }
-                // A pose frame must be orthogonal: preserve the part of the
-                // travel direction lying in the tangent plane.
-                xAxis -= surfaceNormal * xAxis.dot(surfaceNormal);
-                if(xAxis.norm() <= 1e-8) {
+                // Projected and average normals preserve Z and project the forward
+                // reference when needed to build an orthonormal frame.
+                const bool projectForward = trajParams.forwardDirectionMode == 0 ||
+                    trajParams.normalDirectionMode == 1 || trajParams.normalDirectionMode == 2;
+                if (projectForward) {
+                    xAxis -= surfaceNormal * xAxis.dot(surfaceNormal);
+                }
+                if (projectForward && xAxis.norm() <= 1e-8) {
                     const Eigen::Vector3d referenceAxis =
                         std::abs(surfaceNormal.z()) < 0.9
                         ? Eigen::Vector3d::UnitZ() : Eigen::Vector3d::UnitY();
                     xAxis = referenceAxis.cross(surfaceNormal);
                 }
-                xAxis.normalize();
-                if(startFromUpper) xAxis = -xAxis;
-                Eigen::Vector3d yAxis = surfaceNormal.cross(xAxis).normalized();
+                if (xAxis.norm() > 1e-8) xAxis.normalize();
+                if(startFromUpper && trajParams.forwardDirectionMode != 2) xAxis = -xAxis;
+                Eigen::Vector3d yAxis = surfaceNormal.cross(xAxis);
+                if (yAxis.norm() <= 1e-8) {
+                    const Eigen::Vector3d fallback = std::abs(surfaceNormal.z()) < 0.9
+                        ? Eigen::Vector3d::UnitZ() : Eigen::Vector3d::UnitY();
+                    yAxis = surfaceNormal.cross(fallback);
+                }
+                yAxis.normalize();
 
                 // 5. The tool position is offset opposite to its pose normal.
                 // The distance sign has already selected the normal direction

@@ -217,7 +217,7 @@ namespace coplanar_checks
                 require(point.pose.block<3,3>(0,0).isApprox(expectedRotation),
                     "Normal offset controls changed the selected endpoint orientation.");
                 Eigen::Vector3d expectedPosition = defaultPoses[i].pose.block<3,1>(0,3);
-                double expectedDistance = std::abs(generation.offsetDistance);
+                double expectedDistance = generation.offsetDistance;
                 if(transition) {
                     const auto& column = trajectories.sampledBoundaryPoints_[point.trajectory_index];
                     expectedPosition = column[point.layer_index];
@@ -227,7 +227,7 @@ namespace coplanar_checks
                             (front ? -generation.z1Offset : generation.z2Offset) * otherFrame.col(0);
                     }
                     const int mode = front ? upperMode : lowerMode;
-                    expectedDistance = mode == 0 ? 0.0 : (mode == 1 ? std::abs(generation.offsetDistance) : (front ? 4.0 : 6.0));
+                    expectedDistance = mode == 0 ? 0.0 : (mode == 1 ? generation.offsetDistance : (front ? 4.0 : 6.0));
                     const Eigen::Matrix3d canonical = expectedRotation * mapping.transpose();
                     expectedPosition -= expectedDistance * canonical.col(2);
                 }
